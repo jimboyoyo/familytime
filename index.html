@@ -1,0 +1,1363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Family Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Courier+Prime:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --board-bg-1:#c8b184;
+    --card-bg:#f6efd9;
+    --card-bg-edge:#e9dfc0;
+    --ink:#2c2620;
+    --ink-soft:#6b6255;
+    --pin:#7c2f2f;
+    --pin-highlight:#a84a4a;
+    --thread-parent:#5c4326;
+    --thread-spouse:#a23636;
+    --thread-sibling:#33507e;
+    --accent:#8a6a34;
+    --accent-dark:#6e5427;
+    --panel-bg:#26221c;
+    --panel-ink:#e8dfc9;
+    --font-display:'Special Elite', cursive;
+    --font-body:'Courier Prime', monospace;
+    --font-ui:'Inter', sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;font-family:var(--font-ui);}
+
+  #toolbar{
+    position:fixed; top:0; left:0; right:0; height:56px;
+    background:var(--panel-bg); color:var(--panel-ink);
+    display:flex; align-items:center; padding:0 20px; gap:24px;
+    z-index:10; box-shadow:0 2px 8px rgba(0,0,0,0.3);
+  }
+  #toolbar .title{ font-family:var(--font-display); font-size:19px; letter-spacing:1px; }
+  #toolbar .count{ margin-left:auto; font-size:12px; color:#b8ad95; }
+  .sync-status{
+    display:flex; align-items:center; gap:6px;
+    font-size:11px; color:#b8ad95;
+  }
+  .sync-dot{
+    width:8px; height:8px; border-radius:50%;
+    background:#8a8478;
+    transition:background 0.2s ease;
+  }
+  .sync-status.connecting .sync-dot{ background:#c9a227; }
+  .sync-status.synced .sync-dot{ background:#4a8a4a; }
+  .sync-status.error .sync-dot{ background:#a23636; }
+  .legend{ display:flex; gap:16px; font-size:11px; color:#cfc4a8; }
+  .legend-item{ display:flex; align-items:center; gap:6px; }
+  .legend-swatch{ width:18px; height:2.5px; border-radius:2px; }
+
+  #canvas{
+    position:fixed;
+    top:56px; left:0; right:0; bottom:0;
+    overflow:auto;
+    cursor:grab;
+    background-color:var(--board-bg-1);
+    background-image:
+      repeating-linear-gradient(45deg, rgba(255,255,255,0.035) 0px, rgba(255,255,255,0.035) 2px, transparent 2px, transparent 6px),
+      repeating-linear-gradient(-45deg, rgba(0,0,0,0.035) 0px, rgba(0,0,0,0.035) 2px, transparent 2px, transparent 6px);
+  }
+  #canvas.panning{ cursor:grabbing; }
+
+  #world{
+    position:relative;
+    width:4000px;
+    height:3000px;
+  }
+
+  #links-svg{
+    position:absolute; top:0; left:0;
+    width:100%; height:100%;
+    pointer-events:none;
+  }
+  .thread{ fill:none; stroke-width:2.2; opacity:0.85; }
+  .thread-parent{ stroke:var(--thread-parent); }
+  .thread-spouse{ stroke:var(--thread-spouse); stroke-width:2.6; }
+  .thread-sibling{ stroke:var(--thread-sibling); stroke-dasharray:5,4; }
+
+  .link-tag{
+    position:absolute;
+    transform:translate(-50%, -50%);
+    background:var(--card-bg);
+    border:1px solid rgba(0,0,0,0.28);
+    border-radius:3px;
+    padding:2px 7px;
+    font-family:var(--font-body);
+    font-size:10px;
+    text-transform:capitalize;
+    color:var(--ink);
+    white-space:nowrap;
+    box-shadow:1px 2px 4px rgba(0,0,0,0.3);
+    pointer-events:none;
+  }
+
+  .card{
+    position:absolute;
+    width:150px; min-height:80px;
+    background:linear-gradient(180deg, var(--card-bg), var(--card-bg-edge));
+    border:1px solid rgba(0,0,0,0.25);
+    border-radius:2px;
+    padding:14px 10px 10px 10px;
+    box-shadow:2px 4px 10px rgba(0,0,0,0.35);
+    cursor:grab;
+    user-select:none;
+    text-align:center;
+  }
+  .card.dragging{ cursor:grabbing; box-shadow:3px 8px 18px rgba(0,0,0,0.5); z-index:5; }
+
+  .pin{
+    position:absolute; top:-7px; left:50%; transform:translateX(-50%);
+    width:13px; height:13px; border-radius:50%;
+    background:radial-gradient(circle at 35% 30%, var(--pin-highlight), var(--pin));
+    box-shadow:0 2px 3px rgba(0,0,0,0.5);
+  }
+  .card .name{ font-family:var(--font-display); font-size:15px; color:var(--ink); line-height:1.25; word-break:break-word; }
+  .card .dates{ font-family:var(--font-body); font-size:11px; color:var(--ink-soft); margin-top:4px; }
+  .card .maiden{ font-family:var(--font-body); font-size:10px; font-style:italic; color:var(--ink-soft); margin-top:2px; }
+  .label-optional{ text-transform:none; letter-spacing:0; font-style:italic; }
+  .card .gender-dot{ display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:5px; vertical-align:middle; }
+
+  .add-btn{
+    position:absolute; bottom:-12px; right:-12px;
+    width:26px; height:26px; border-radius:50%;
+    background:var(--accent); border:2px solid var(--card-bg); color:#fff;
+    font-size:16px; font-weight:600; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; box-shadow:0 2px 5px rgba(0,0,0,0.4);
+  }
+  .add-btn:hover{ background:var(--accent-dark); }
+
+  #ghost-card{
+    position:absolute;
+    width:170px; padding:22px 14px; text-align:center;
+    border:2px dashed rgba(0,0,0,0.4); border-radius:4px;
+    background:rgba(255,255,255,0.15);
+    color:var(--ink); font-family:var(--font-ui); font-size:13px;
+    cursor:pointer;
+  }
+  #ghost-card .plus{ display:block; font-size:30px; line-height:1; margin-bottom:8px; font-weight:300; }
+  #ghost-card:hover{ background:rgba(255,255,255,0.28); }
+
+  #overlay{
+    position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(20,17,12,0.55);
+    display:none; align-items:center; justify-content:center;
+    z-index:20;
+  }
+  #overlay.open{ display:flex; }
+  #modal{
+    width:320px; background:var(--card-bg); border-radius:4px;
+    padding:22px 22px 18px; box-shadow:0 12px 30px rgba(0,0,0,0.5);
+    font-family:var(--font-ui); color:var(--ink);
+  }
+  #modal h2{ font-family:var(--font-display); font-size:17px; margin:0 0 14px; }
+  #modal label{ display:block; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-soft); margin:12px 0 4px; }
+  #modal input, #modal select{
+    width:100%; padding:7px 8px; font-family:var(--font-ui); font-size:13px;
+    border:1px solid rgba(0,0,0,0.3); border-radius:3px; background:#fffdf6;
+  }
+  .modal-row{ display:flex; gap:10px; }
+  .modal-row > div{ flex:1; }
+
+  .suggestions{
+    display:none;
+    margin-top:2px;
+    border:1px solid rgba(0,0,0,0.25);
+    border-radius:3px;
+    background:#fffdf6;
+    max-height:150px;
+    overflow-y:auto;
+  }
+  .suggestions.open{ display:block; }
+  .suggestion-item{
+    padding:6px 9px;
+    font-size:13px;
+    font-family:var(--font-ui);
+    cursor:pointer;
+    border-bottom:1px solid rgba(0,0,0,0.08);
+  }
+  .suggestion-item:last-child{ border-bottom:none; }
+  .suggestion-item:hover{ background:#eee2c2; }
+  .suggestion-item .s-dates{ color:var(--ink-soft); font-size:11px; margin-left:5px; }
+
+  .existing-note{
+    display:none;
+    margin-top:8px;
+    font-size:11px;
+    line-height:1.5;
+    color:var(--ink-soft);
+    background:#eee2c2;
+    padding:7px 9px;
+    border-radius:3px;
+  }
+  .existing-note a{ color:var(--accent-dark); font-weight:600; }
+  .existing-note.open{ display:block; }
+  #modal .actions{ display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
+  #modal button{ font-family:var(--font-ui); font-size:13px; padding:8px 16px; border-radius:3px; border:none; cursor:pointer; }
+  #modal .btn-cancel{ background:transparent; color:var(--ink-soft); }
+  #modal .btn-submit{ background:var(--accent); color:#fff; font-weight:600; }
+  #modal .btn-submit:hover{ background:var(--accent-dark); }
+
+  /* ---------- Timeline modal ---------- */
+  #timeline-overlay{
+    position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(20,17,12,0.55);
+    display:none; align-items:center; justify-content:center;
+    z-index:20;
+  }
+  #timeline-overlay.open{ display:flex; }
+  #timeline-modal{
+    width:560px; max-width:92vw;
+    max-height:78vh;
+    background:var(--card-bg);
+    border-radius:4px;
+    box-shadow:0 12px 30px rgba(0,0,0,0.5);
+    display:flex; flex-direction:column;
+    overflow:hidden;
+  }
+  .timeline-header{
+    display:flex; align-items:flex-start; justify-content:space-between;
+    padding:18px 20px 14px;
+    border-bottom:2px solid rgba(0,0,0,0.15);
+    background:var(--card-bg-edge);
+  }
+  .timeline-header h2{
+    font-family:var(--font-display); font-size:19px; margin:0 0 4px; color:var(--ink);
+  }
+  .timeline-dates{
+    font-family:var(--font-body); font-size:12px; color:var(--ink-soft);
+  }
+  #timeline-close{
+    background:none; border:none; font-size:24px; line-height:1;
+    color:var(--ink-soft); cursor:pointer; padding:0 4px;
+  }
+  #timeline-close:hover{ color:var(--ink); }
+  .timeline-header-actions{ display:flex; align-items:center; gap:4px; }
+  .icon-btn{
+    background:none; border:none; font-size:19px; line-height:1;
+    color:var(--ink-soft); cursor:pointer; padding:2px 6px;
+    border-radius:3px;
+  }
+  .icon-btn:hover{ color:var(--ink); background:rgba(0,0,0,0.06); }
+  #timeline-close, #edit-close{ font-size:24px; }
+
+  #timeline-body{ overflow-y:auto; }
+  #timeline-table{ width:100%; border-collapse:collapse; font-family:var(--font-ui); font-size:13px; }
+  #timeline-table thead th{
+    position:sticky; top:0;
+    background:var(--card-bg-edge);
+    text-align:left;
+    font-size:10px; text-transform:uppercase; letter-spacing:0.6px;
+    color:var(--ink-soft);
+    padding:8px 16px;
+    border-bottom:1px solid rgba(0,0,0,0.2);
+  }
+  #timeline-table td{
+    padding:7px 16px;
+    border-bottom:1px solid rgba(0,0,0,0.07);
+    vertical-align:top;
+  }
+  #timeline-table td.tl-year{
+    font-family:var(--font-body); font-weight:700; color:var(--ink);
+    white-space:nowrap; width:64px;
+  }
+  #timeline-table td.tl-event{ color:var(--ink-soft); font-style:italic; }
+  #timeline-table td.tl-evidence{ color:var(--ink-soft); }
+  #timeline-table tbody tr:nth-child(even){ background:rgba(0,0,0,0.025); }
+  #timeline-table tbody tr:hover{ background:rgba(138,106,52,0.09); }
+
+  .timeline-empty-note{
+    display:none;
+    padding:26px 20px;
+    text-align:center;
+    color:var(--ink-soft);
+    font-size:13px;
+    line-height:1.6;
+  }
+
+  /* ---------- Edit person modal ---------- */
+  #edit-overlay{
+    position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(20,17,12,0.55);
+    display:none; align-items:center; justify-content:center;
+    z-index:21;
+  }
+  #edit-overlay.open{ display:flex; }
+  #edit-modal{
+    width:460px; max-width:92vw;
+    max-height:85vh;
+    background:var(--card-bg);
+    border-radius:4px;
+    box-shadow:0 12px 30px rgba(0,0,0,0.5);
+    display:flex; flex-direction:column;
+    overflow:hidden;
+    font-family:var(--font-ui);
+    color:var(--ink);
+  }
+  #edit-modal .timeline-header{ background:var(--card-bg-edge); }
+  #edit-modal .timeline-header h2{ font-size:17px; }
+  #edit-body{ overflow-y:auto; padding:4px 20px 20px; }
+
+  .edit-section{ padding:16px 0; border-bottom:1px solid rgba(0,0,0,0.12); }
+  .edit-section:last-child{ border-bottom:none; }
+  .edit-section h3{
+    font-family:var(--font-display); font-size:14px; margin:0 0 10px;
+    color:var(--ink); letter-spacing:0.3px;
+  }
+  .edit-section label{
+    display:block; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;
+    color:var(--ink-soft); margin:10px 0 4px;
+  }
+  .edit-section label:first-of-type{ margin-top:0; }
+  .edit-section input, .edit-section select{
+    width:100%; padding:7px 8px; font-family:var(--font-ui); font-size:13px;
+    border:1px solid rgba(0,0,0,0.3); border-radius:3px; background:#fffdf6;
+  }
+  .edit-save-btn{ margin-top:14px; }
+  .edit-save-confirm{
+    display:none;
+    margin-left:10px; font-size:12px; color:#4a8a4a; font-weight:600;
+  }
+  .edit-save-confirm.show{ display:inline-block; }
+
+  .btn-secondary{
+    font-family:var(--font-ui); font-size:12px; font-weight:600;
+    padding:7px 12px; border-radius:3px; border:1px solid var(--accent);
+    background:transparent; color:var(--accent-dark); cursor:pointer;
+    margin-top:8px;
+  }
+  .btn-secondary:hover{ background:rgba(138,106,52,0.1); }
+
+  .edit-list{ display:flex; flex-direction:column; gap:6px; }
+  .edit-list-empty{ font-size:12px; color:var(--ink-soft); font-style:italic; padding:2px 0; }
+  .edit-list-item{
+    display:flex; align-items:flex-start; justify-content:space-between;
+    gap:10px;
+    background:#fffdf6;
+    border:1px solid rgba(0,0,0,0.15);
+    border-radius:3px;
+    padding:7px 10px;
+    font-size:13px;
+  }
+  .edit-list-item .item-main{ flex:1; }
+  .edit-list-item .item-year{ font-family:var(--font-body); font-weight:700; margin-right:6px; }
+  .edit-list-item .item-sub{ color:var(--ink-soft); font-size:11px; margin-top:2px; }
+  .item-remove{
+    background:none; border:none; color:var(--thread-spouse);
+    font-size:15px; line-height:1; cursor:pointer; padding:0 2px; flex-shrink:0;
+  }
+  .item-remove:hover{ color:#7a1f1f; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div class="title">FAMILY BOARD</div>
+  <div class="legend">
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-parent)"></span>Parent / child</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-spouse)"></span>Spouse</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-sibling);border-top:2px dashed var(--thread-sibling);height:0;"></span>Sibling</div>
+  </div>
+  <div class="count" id="person-count">0 people</div>
+  <div class="sync-status" id="sync-status"><span class="sync-dot"></span><span id="sync-label">Connecting...</span></div>
+</div>
+
+<div id="canvas">
+  <div id="world">
+    <svg id="links-svg"></svg>
+    <div id="ghost-card">
+      <span class="plus">+</span>
+      Add the first person
+    </div>
+  </div>
+</div>
+
+<div id="overlay">
+  <div id="modal">
+    <h2 id="modal-title">Add person</h2>
+    <form id="person-form">
+      <div id="relation-field">
+        <label for="relation">Relation to selected person</label>
+        <select id="relation">
+          <option value="parent">Parent</option>
+          <option value="child">Child</option>
+          <option value="spouse">Spouse</option>
+          <option value="sibling">Sibling</option>
+        </select>
+      </div>
+      <label for="p-name">Full name</label>
+      <input id="p-name" type="text" required autocomplete="off" placeholder="e.g. Margaret O'Neill">
+      <div id="name-suggestions" class="suggestions"></div>
+      <div id="existing-note" class="existing-note">
+        Linking the existing person already on the board.
+        <a href="#" id="clear-existing">Add as a new person instead</a>
+      </div>
+      <label for="p-maiden">Maiden name <span class="label-optional">(if different)</span></label>
+      <input id="p-maiden" type="text" placeholder="e.g. Sullivan">
+      <div class="modal-row">
+        <div>
+          <label for="p-birth">Born</label>
+          <input id="p-birth" type="number" placeholder="1902">
+        </div>
+        <div>
+          <label for="p-death">Died</label>
+          <input id="p-death" type="number" placeholder="blank if living">
+        </div>
+      </div>
+      <label for="p-birthplace">Place of birth</label>
+      <input id="p-birthplace" type="text" placeholder="e.g. Cork, Ireland">
+      <label for="p-gender">Gender</label>
+      <select id="p-gender">
+        <option value="f">Female</option>
+        <option value="m">Male</option>
+        <option value="o">Other</option>
+        <option value="u">Unknown</option>
+      </select>
+      <div class="actions">
+        <button type="button" class="btn-cancel" id="btn-cancel">Cancel</button>
+        <button type="submit" class="btn-submit">Add to board</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="timeline-overlay">
+  <div id="timeline-modal">
+    <div class="timeline-header">
+      <div>
+        <h2 id="timeline-name">Name</h2>
+        <div id="timeline-dates" class="timeline-dates"></div>
+      </div>
+      <div class="timeline-header-actions">
+        <button id="timeline-edit-btn" type="button" class="icon-btn" aria-label="Edit person" title="Edit person">&#9998;</button>
+        <button id="timeline-close" type="button" class="icon-btn" aria-label="Close">&times;</button>
+      </div>
+    </div>
+    <div id="timeline-body">
+      <table id="timeline-table">
+        <thead>
+          <tr><th>Year</th><th>Event</th><th>Evidence</th></tr>
+        </thead>
+        <tbody id="timeline-tbody"></tbody>
+      </table>
+      <div id="timeline-empty-note" class="timeline-empty-note"></div>
+    </div>
+  </div>
+</div>
+
+<div id="edit-overlay">
+  <div id="edit-modal">
+    <div class="timeline-header">
+      <h2>Edit <span id="edit-person-name-label"></span></h2>
+      <button id="edit-close" type="button" class="icon-btn" aria-label="Close">&times;</button>
+    </div>
+    <div id="edit-body">
+
+      <section class="edit-section">
+        <h3>Basic info</h3>
+        <label for="edit-name">Full name</label>
+        <input id="edit-name" type="text">
+        <label for="edit-maiden">Maiden name <span class="label-optional">(if different)</span></label>
+        <input id="edit-maiden" type="text" placeholder="e.g. Sullivan">
+        <div class="modal-row">
+          <div>
+            <label for="edit-birth">Born</label>
+            <input id="edit-birth" type="number" placeholder="1902">
+          </div>
+          <div>
+            <label for="edit-death">Died</label>
+            <input id="edit-death" type="number" placeholder="blank if living">
+          </div>
+        </div>
+        <label for="edit-birthplace">Place of birth</label>
+        <input id="edit-birthplace" type="text" placeholder="e.g. Cork, Ireland">
+        <label for="edit-gender">Gender</label>
+        <select id="edit-gender">
+          <option value="f">Female</option>
+          <option value="m">Male</option>
+          <option value="o">Other</option>
+          <option value="u">Unknown</option>
+        </select>
+        <button id="edit-save-basic" type="button" class="btn-submit edit-save-btn">Save changes</button>
+        <span id="edit-save-confirm" class="edit-save-confirm">Saved</span>
+      </section>
+
+      <section class="edit-section">
+        <h3>Relations</h3>
+        <div id="edit-relations-list" class="edit-list"></div>
+        <button id="edit-add-relation" type="button" class="btn-secondary">+ Add relation</button>
+      </section>
+
+      <section class="edit-section">
+        <h3>Life events</h3>
+        <div id="edit-events-list" class="edit-list"></div>
+        <form id="edit-event-form">
+          <div class="modal-row">
+            <div style="flex:0 0 90px;">
+              <label for="event-year">Year</label>
+              <input id="event-year" type="number" placeholder="1925">
+            </div>
+            <div>
+              <label for="event-desc">What happened</label>
+              <input id="event-desc" type="text" placeholder="e.g. Married Margaret O'Neill">
+            </div>
+          </div>
+          <label for="event-evidence">Evidence (link or note)</label>
+          <input id="event-evidence" type="text" placeholder="e.g. Parish register, St. Mary's, 1925">
+          <button type="submit" class="btn-secondary">+ Add event</button>
+        </form>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js';
+import {
+  getAuth, signInAnonymously, onAuthStateChanged
+} from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js';
+import {
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
+} from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js';
+
+// Your web app's Firebase configuration.
+// Firebase API keys are meant to be public (security is enforced by
+// Firestore security rules, not by hiding this key), so it's fine embedded
+// directly in a client-side file like this one.
+const firebaseConfig = {
+  apiKey: "AIzaSyC_v8DTz9QKMivyd7aW0aioHzlI8GMCa5g",
+  authDomain: "familytime-a6854.firebaseapp.com",
+  databaseURL: "https://familytime-a6854-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "familytime-a6854",
+  storageBucket: "familytime-a6854.firebasestorage.app",
+  messagingSenderId: "713977255018",
+  appId: "1:713977255018:web:2e88ea6f6ac6a78f896613"
+};
+
+const fbApp = initializeApp(firebaseConfig);
+const auth = getAuth(fbApp);
+const db = getFirestore(fbApp);
+const peopleCol = collection(db, 'people');
+const linksCol = collection(db, 'links');
+const eventsCol = collection(db, 'events');
+
+(function(){
+
+  // ---------- World / data ----------
+  const WORLD_W = 4000, WORLD_H = 3000;
+  const CENTER_X = WORLD_W / 2, CENTER_Y = WORLD_H / 2;
+  const CARD_W = 150, CARD_H = 80;
+
+  let nodes = [];       // {id, name, birth, death, gender, rotation, x, y}
+  let links = [];       // {source, target, type: 'parent' | 'spouse' | 'sibling'}
+  let events = [];      // {id, personId, year, description, evidence, createdAt}
+
+  const genderColor = { f:'#a2456b', m:'#3a5b8b', o:'#7a5ba8', u:'#8a8478' };
+
+  const OFFSETS = {
+    parent:  { dx: 0,    dy: -170 },
+    child:   { dx: 0,    dy: 170  },
+    spouse:  { dx: 210,  dy: 0    },
+    sibling: { dx: -210, dy: 0    }
+  };
+
+  // ---------- DOM refs ----------
+  const canvasEl = document.getElementById('canvas');
+  const worldEl = document.getElementById('world');
+  const linksSvg = document.getElementById('links-svg');
+  const ghostCard = document.getElementById('ghost-card');
+  const overlay = document.getElementById('overlay');
+  const modalTitle = document.getElementById('modal-title');
+  const relationField = document.getElementById('relation-field');
+  const relationSelect = document.getElementById('relation');
+  const form = document.getElementById('person-form');
+  const personCountEl = document.getElementById('person-count');
+  const syncStatusEl = document.getElementById('sync-status');
+  const syncLabelEl = document.getElementById('sync-label');
+
+  let pendingSourceId = null; // person we're adding a relative to (null = first person)
+  const cardEls = {};         // id -> card DOM element
+  const linkEls = [];         // {el, sourceId, targetId}
+
+  function nodeById(id){ return nodes.find(n => n.id === id); }
+
+  // ---------- Rendering ----------
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function linkPath(sx, sy, tx, ty){
+    const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+    const dist = Math.hypot(tx - sx, ty - sy);
+    const sag = Math.min(45, dist * 0.18);
+    return `M${sx},${sy} Q${mx},${my + sag} ${tx},${ty}`;
+  }
+
+  // Word describing what the SOURCE is to the TARGET, e.g. for a parent
+  // link (source is parent of target) this returns "father"/"mother"/"parent" —
+  // i.e. what the person at the near end (line start) is to the person at the
+  // far end. This sits near the source, so it reads as "this person is a ___
+  // to the person the thread leads to".
+  function relationLabel(type, sourceNode){
+    const g = sourceNode.gender;
+    if (type === 'parent'){
+      if (g === 'm') return 'father';
+      if (g === 'f') return 'mother';
+      return 'parent';
+    }
+    if (type === 'spouse'){
+      if (g === 'm') return 'husband';
+      if (g === 'f') return 'wife';
+      return 'spouse';
+    }
+    if (type === 'sibling'){
+      if (g === 'm') return 'brother';
+      if (g === 'f') return 'sister';
+      return 'sibling';
+    }
+    return '';
+  }
+
+  // Point at parameter t (0..1) along the same quadratic curve used for the thread.
+  function pointOnCurve(p0, p1, p2, t){
+    const mt = 1 - t;
+    return {
+      x: mt * mt * p0.x + 2 * mt * t * p1.x + t * t * p2.x,
+      y: mt * mt * p0.y + 2 * mt * t * p1.y + t * t * p2.y
+    };
+  }
+
+  // Choose a t that places the label roughly a fixed pixel distance from the
+  // source end ("the beginning of the line"), regardless of the link's total
+  // length, clamped so it never lands past the midpoint or right on the pin.
+  function labelParamForDistance(dist){
+    const desired = 55;
+    const t = dist > 0 ? desired / dist : 0.3;
+    return Math.min(0.42, Math.max(0.16, t));
+  }
+
+  // Cheap update: just move existing elements to match current node/link data.
+  // Called on drag and after adding someone.
+  function updatePositions(){
+    nodes.forEach(n => {
+      const el = cardEls[n.id];
+      if (!el) return;
+      el.style.left = (n.x - CARD_W / 2) + 'px';
+      el.style.top = (n.y - CARD_H / 2) + 'px';
+      el.style.transform = `rotate(${n.rotation}deg)`;
+    });
+    linkEls.forEach(l => {
+      const s = nodeById(l.sourceId), t = nodeById(l.targetId);
+      if (!s || !t) return;
+      const mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
+      const dist = Math.hypot(t.x - s.x, t.y - s.y);
+      const sag = Math.min(45, dist * 0.18);
+      const p0 = { x: s.x, y: s.y }, p1 = { x: mx, y: my + sag }, p2 = { x: t.x, y: t.y };
+      l.el.setAttribute('d', `M${p0.x},${p0.y} Q${p1.x},${p1.y} ${p2.x},${p2.y}`);
+
+      const labelPt = pointOnCurve(p0, p1, p2, labelParamForDistance(dist));
+      l.tagEl.style.left = labelPt.x + 'px';
+      l.tagEl.style.top = labelPt.y + 'px';
+    });
+  }
+
+  // Full rebuild: called whenever nodes/links are added or removed.
+  function renderAll(){
+    // clear
+    linksSvg.innerHTML = '';
+    linkEls.length = 0;
+    Object.keys(cardEls).forEach(id => delete cardEls[id]);
+    worldEl.querySelectorAll('.card').forEach(el => el.remove());
+    worldEl.querySelectorAll('.link-tag').forEach(el => el.remove());
+
+    // links (draw first, underneath cards)
+    links.forEach(l => {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('class', 'thread thread-' + l.type);
+      linksSvg.appendChild(path);
+
+      const tag = document.createElement('div');
+      tag.className = 'link-tag';
+      const sourceNode = nodeById(l.source);
+      tag.textContent = sourceNode ? relationLabel(l.type, sourceNode) : '';
+      worldEl.appendChild(tag);
+
+      linkEls.push({ el: path, tagEl: tag, sourceId: l.source, targetId: l.target });
+    });
+
+    // cards
+    nodes.forEach(n => {
+      const card = document.createElement('div');
+      card.className = 'card';
+
+      const pin = document.createElement('div');
+      pin.className = 'pin';
+      card.appendChild(pin);
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'name';
+      nameEl.innerHTML = `<span class="gender-dot" style="background:${genderColor[n.gender] || genderColor.u}"></span>${escapeHtml(n.name)}`;
+      card.appendChild(nameEl);
+
+      const datesEl = document.createElement('div');
+      datesEl.className = 'dates';
+      if (n.birth || n.death){
+        const b = n.birth || '?';
+        const d = n.death ? n.death : 'living';
+        datesEl.textContent = `${b} \u2013 ${d}`;
+      }
+      card.appendChild(datesEl);
+
+      if (n.maidenName){
+        const maidenEl = document.createElement('div');
+        maidenEl.className = 'maiden';
+        maidenEl.textContent = `n\u00e9e ${n.maidenName}`;
+        card.appendChild(maidenEl);
+      }
+
+      const addBtn = document.createElement('div');
+      addBtn.className = 'add-btn';
+      addBtn.textContent = '+';
+      addBtn.addEventListener('click', (e) => { e.stopPropagation(); openModal(n.id); });
+      card.appendChild(addBtn);
+
+      attachDrag(card, n);
+
+      worldEl.appendChild(card);
+      cardEls[n.id] = card;
+    });
+
+    personCountEl.textContent = nodes.length + (nodes.length === 1 ? ' person' : ' people');
+    ghostCard.style.display = nodes.length === 0 ? 'block' : 'none';
+
+    updatePositions();
+  }
+
+  // ---------- Drag ----------
+  function attachDrag(cardEl, node){
+    let startX, startY, startNodeX, startNodeY, dragging = false, moved = false;
+
+    cardEl.addEventListener('mousedown', (e) => {
+      // Ignore drags started on the add button
+      if (e.target.closest('.add-btn')) return;
+      e.stopPropagation(); // don't also trigger background panning
+      dragging = true;
+      moved = false;
+      cardEl.classList.add('dragging');
+      startX = e.clientX; startY = e.clientY;
+      startNodeX = node.x; startNodeY = node.y;
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - startX, dy = e.clientY - startY;
+      if (Math.hypot(dx, dy) > 4) moved = true; // small threshold = still a "click"
+      node.x = clamp(startNodeX + dx, CARD_W, WORLD_W - CARD_W);
+      node.y = clamp(startNodeY + dy, CARD_H, WORLD_H - CARD_H);
+      updatePositions();
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      cardEl.classList.remove('dragging');
+      if (moved){
+        // Only write the final position once the drag ends, not on every
+        // mousemove — that would flood Firestore with writes.
+        updateDoc(doc(peopleCol, node.id), { x: node.x, y: node.y }).catch(err => {
+          console.error('Failed to save position', err);
+        });
+      } else {
+        openTimelineModal(node.id);
+      }
+    });
+  }
+
+  function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+
+  // ---------- Scrolling to a point ----------
+  function centerOn(x, y){
+    const targetLeft = clamp(x - canvasEl.clientWidth / 2, 0, WORLD_W - canvasEl.clientWidth);
+    const targetTop = clamp(y - canvasEl.clientHeight / 2, 0, WORLD_H - canvasEl.clientHeight);
+    canvasEl.scrollTo({ left: targetLeft, top: targetTop, behavior: 'smooth' });
+  }
+
+  // ---------- Background pan (click-and-drag to move the view) ----------
+  function attachPan(){
+    let panning = false;
+    let startX, startY, startScrollLeft, startScrollTop;
+
+    canvasEl.addEventListener('mousedown', (e) => {
+      // Only pan when the mousedown is on empty board, not on a card
+      // (card mousedown handlers call stopPropagation, so this only fires
+      // for genuine background clicks/drags).
+      if (e.target.closest('.card')) return;
+      panning = true;
+      canvasEl.classList.add('panning');
+      startX = e.clientX; startY = e.clientY;
+      startScrollLeft = canvasEl.scrollLeft;
+      startScrollTop = canvasEl.scrollTop;
+      e.preventDefault();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!panning) return;
+      const dx = e.clientX - startX, dy = e.clientY - startY;
+      canvasEl.scrollLeft = startScrollLeft - dx;
+      canvasEl.scrollTop = startScrollTop - dy;
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!panning) return;
+      panning = false;
+      canvasEl.classList.remove('panning');
+    });
+  }
+
+  // ---------- Timeline modal ----------
+  const timelineOverlay = document.getElementById('timeline-overlay');
+  const timelineNameEl = document.getElementById('timeline-name');
+  const timelineDatesEl = document.getElementById('timeline-dates');
+  const timelineTable = document.getElementById('timeline-table');
+  const timelineTbody = document.getElementById('timeline-tbody');
+  const timelineEmptyNote = document.getElementById('timeline-empty-note');
+
+  const MAX_TIMELINE_YEARS = 200; // sanity cap against bad/typo'd dates
+  let currentTimelinePersonId = null;
+
+  function eventsForPerson(personId){
+    return events
+      .filter(e => e.personId === personId)
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  }
+
+  function openTimelineModal(personId){
+    const person = nodeById(personId);
+    if (!person) return;
+    currentTimelinePersonId = personId;
+
+    timelineNameEl.textContent = person.maidenName ? `${person.name} (n\u00e9e ${person.maidenName})` : person.name;
+    const dateRange = person.birth
+      ? `${person.birth} \u2013 ${person.death || 'present'}`
+      : 'Birth year unknown';
+    timelineDatesEl.textContent = person.birthPlace ? `${dateRange} \u00b7 Born in ${person.birthPlace}` : dateRange;
+
+    timelineTbody.innerHTML = '';
+
+    if (!person.birth){
+      timelineTable.style.display = 'none';
+      timelineEmptyNote.style.display = 'block';
+      timelineEmptyNote.textContent = "This person's birth year isn't recorded, so a timeline can't be generated yet. Click the pencil icon to add one.";
+      timelineOverlay.classList.add('open');
+      return;
+    }
+
+    const endYear = person.death || new Date().getFullYear();
+
+    if (endYear < person.birth){
+      timelineTable.style.display = 'none';
+      timelineEmptyNote.style.display = 'block';
+      timelineEmptyNote.textContent = "The death year is earlier than the birth year \u2014 check these dates to generate a timeline.";
+      timelineOverlay.classList.add('open');
+      return;
+    }
+
+    if (endYear - person.birth > MAX_TIMELINE_YEARS){
+      timelineTable.style.display = 'none';
+      timelineEmptyNote.style.display = 'block';
+      timelineEmptyNote.textContent = `That's a ${endYear - person.birth}-year span \u2014 double check the birth/death years before generating a timeline this long.`;
+      timelineOverlay.classList.add('open');
+      return;
+    }
+
+    timelineTable.style.display = '';
+    timelineEmptyNote.style.display = 'none';
+
+    const personEvents = eventsForPerson(personId);
+
+    for (let y = person.birth; y <= endYear; y++){
+      const yearEvents = personEvents.filter(e => e.year === y);
+      const rowCount = Math.max(1, yearEvents.length);
+
+      for (let i = 0; i < rowCount; i++){
+        const tr = document.createElement('tr');
+
+        // Only the first row for a given year shows the year cell;
+        // it spans down over any additional events in that same year.
+        if (i === 0){
+          const tdYear = document.createElement('td');
+          tdYear.className = 'tl-year';
+          tdYear.textContent = y;
+          if (rowCount > 1) tdYear.rowSpan = rowCount;
+          tr.appendChild(tdYear);
+        }
+
+        const ev = yearEvents[i];
+        const tdEvent = document.createElement('td');
+        tdEvent.className = 'tl-event';
+        tdEvent.textContent = ev ? ev.description : '\u2014';
+
+        const tdEvidence = document.createElement('td');
+        tdEvidence.className = 'tl-evidence';
+        tdEvidence.textContent = (ev && ev.evidence) ? ev.evidence : '\u2014';
+
+        tr.appendChild(tdEvent);
+        tr.appendChild(tdEvidence);
+        timelineTbody.appendChild(tr);
+      }
+    }
+
+    timelineOverlay.classList.add('open');
+  }
+
+  document.getElementById('timeline-close').addEventListener('click', () => {
+    timelineOverlay.classList.remove('open');
+  });
+  timelineOverlay.addEventListener('click', (e) => {
+    if (e.target === timelineOverlay) timelineOverlay.classList.remove('open');
+  });
+  document.getElementById('timeline-edit-btn').addEventListener('click', () => {
+    timelineOverlay.classList.remove('open');
+    openEditModal(currentTimelinePersonId);
+  });
+
+  // ---------- Edit person modal ----------
+  const editOverlay = document.getElementById('edit-overlay');
+  const editPersonNameLabel = document.getElementById('edit-person-name-label');
+  const editNameInput = document.getElementById('edit-name');
+  const editBirthInput = document.getElementById('edit-birth');
+  const editDeathInput = document.getElementById('edit-death');
+  const editGenderInput = document.getElementById('edit-gender');
+  const editMaidenInput = document.getElementById('edit-maiden');
+  const editBirthplaceInput = document.getElementById('edit-birthplace');
+  const editSaveBasicBtn = document.getElementById('edit-save-basic');
+  const editSaveConfirm = document.getElementById('edit-save-confirm');
+  const editRelationsList = document.getElementById('edit-relations-list');
+  const editAddRelationBtn = document.getElementById('edit-add-relation');
+  const editEventsList = document.getElementById('edit-events-list');
+  const editEventForm = document.getElementById('edit-event-form');
+
+  let currentEditPersonId = null;
+
+  function relationDescription(link, personId){
+    const otherId = link.source === personId ? link.target : link.source;
+    const other = nodeById(otherId);
+    const otherName = other ? other.name : '(unknown person)';
+
+    if (link.type === 'parent'){
+      return link.source === personId
+        ? `Parent of ${otherName}`
+        : `Child of ${otherName}`;
+    }
+    if (link.type === 'spouse') return `Spouse of ${otherName}`;
+    if (link.type === 'sibling') return `Sibling of ${otherName}`;
+    return `Linked to ${otherName}`;
+  }
+
+  function renderEditRelationsList(){
+    if (!currentEditPersonId) return;
+    const relevant = links.filter(l => l.source === currentEditPersonId || l.target === currentEditPersonId);
+    editRelationsList.innerHTML = '';
+    if (!relevant.length){
+      editRelationsList.innerHTML = '<div class="edit-list-empty">No relations yet.</div>';
+      return;
+    }
+    relevant.forEach(l => {
+      const row = document.createElement('div');
+      row.className = 'edit-list-item';
+      const main = document.createElement('div');
+      main.className = 'item-main';
+      main.textContent = relationDescription(l, currentEditPersonId);
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'item-remove';
+      removeBtn.textContent = '\u2715';
+      removeBtn.title = 'Remove this relation';
+      removeBtn.addEventListener('click', () => {
+        deleteDoc(doc(linksCol, l.id)).catch(err => console.error('Failed to remove relation', err));
+      });
+      row.appendChild(main);
+      row.appendChild(removeBtn);
+      editRelationsList.appendChild(row);
+    });
+  }
+
+  function renderEditEventsList(){
+    if (!currentEditPersonId) return;
+    const personEvents = eventsForPerson(currentEditPersonId);
+    editEventsList.innerHTML = '';
+    if (!personEvents.length){
+      editEventsList.innerHTML = '<div class="edit-list-empty">No life events recorded yet.</div>';
+      return;
+    }
+    personEvents.forEach(ev => {
+      const row = document.createElement('div');
+      row.className = 'edit-list-item';
+      const main = document.createElement('div');
+      main.className = 'item-main';
+      const yearSpan = document.createElement('span');
+      yearSpan.className = 'item-year';
+      yearSpan.textContent = ev.year;
+      main.appendChild(yearSpan);
+      main.appendChild(document.createTextNode(ev.description || ''));
+      if (ev.evidence){
+        const sub = document.createElement('div');
+        sub.className = 'item-sub';
+        sub.textContent = ev.evidence;
+        main.appendChild(sub);
+      }
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'item-remove';
+      removeBtn.textContent = '\u2715';
+      removeBtn.title = 'Remove this event';
+      removeBtn.addEventListener('click', () => {
+        deleteDoc(doc(eventsCol, ev.id)).catch(err => console.error('Failed to remove event', err));
+      });
+      row.appendChild(main);
+      row.appendChild(removeBtn);
+      editEventsList.appendChild(row);
+    });
+  }
+
+  function openEditModal(personId){
+    const person = nodeById(personId);
+    if (!person) return;
+    currentEditPersonId = personId;
+
+    editPersonNameLabel.textContent = person.name;
+    editNameInput.value = person.name || '';
+    editMaidenInput.value = person.maidenName || '';
+    editBirthInput.value = person.birth || '';
+    editDeathInput.value = person.death || '';
+    editBirthplaceInput.value = person.birthPlace || '';
+    editGenderInput.value = person.gender || 'u';
+    editSaveConfirm.classList.remove('show');
+    editEventForm.reset();
+
+    renderEditRelationsList();
+    renderEditEventsList();
+
+    editOverlay.classList.add('open');
+  }
+
+  function closeEditModal(){
+    editOverlay.classList.remove('open');
+    const id = currentEditPersonId;
+    currentEditPersonId = null;
+    // Return to the timeline so newly added events/dates are visible right away.
+    if (id) openTimelineModal(id);
+  }
+
+  document.getElementById('edit-close').addEventListener('click', closeEditModal);
+  editOverlay.addEventListener('click', (e) => { if (e.target === editOverlay) closeEditModal(); });
+
+  editSaveBasicBtn.addEventListener('click', async () => {
+    if (!currentEditPersonId) return;
+    const name = editNameInput.value.trim();
+    if (!name) return;
+    const maidenName = editMaidenInput.value.trim();
+    const birth = editBirthInput.value ? Number(editBirthInput.value) : null;
+    const death = editDeathInput.value ? Number(editDeathInput.value) : null;
+    const birthPlace = editBirthplaceInput.value.trim();
+    const gender = editGenderInput.value;
+    try {
+      await updateDoc(doc(peopleCol, currentEditPersonId), {
+        name, birth, death, gender,
+        maidenName: maidenName || null,
+        birthPlace: birthPlace || null
+      });
+      editPersonNameLabel.textContent = name;
+      editSaveConfirm.classList.add('show');
+      setTimeout(() => editSaveConfirm.classList.remove('show'), 1800);
+    } catch (err){
+      console.error('Failed to save person info', err);
+    }
+  });
+
+  editAddRelationBtn.addEventListener('click', () => {
+    if (!currentEditPersonId) return;
+    reopenEditAfterModal = currentEditPersonId;
+    editOverlay.classList.remove('open');
+    openModal(currentEditPersonId);
+  });
+
+  editEventForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!currentEditPersonId) return;
+    const year = document.getElementById('event-year').value;
+    const description = document.getElementById('event-desc').value.trim();
+    const evidence = document.getElementById('event-evidence').value.trim();
+    if (!year || !description) return;
+    try {
+      await setDoc(doc(eventsCol), {
+        personId: currentEditPersonId,
+        year: Number(year),
+        description,
+        evidence,
+        createdAt: Date.now()
+      });
+      editEventForm.reset();
+    } catch (err){
+      console.error('Failed to add event', err);
+    }
+  });
+
+  // ---------- Modal ----------
+  const nameInput = document.getElementById('p-name');
+  const suggestionsEl = document.getElementById('name-suggestions');
+  const existingNoteEl = document.getElementById('existing-note');
+  const birthInput = document.getElementById('p-birth');
+  const deathInput = document.getElementById('p-death');
+  const genderInput = document.getElementById('p-gender');
+  const maidenInput = document.getElementById('p-maiden');
+  const birthplaceInput = document.getElementById('p-birthplace');
+
+  let selectedExistingId = null; // set when the user picks a suggestion instead of typing a new person
+
+  function linkExists(sourceId, targetId, type){
+    return links.some(l => l.type === type && (
+      (l.source === sourceId && l.target === targetId) ||
+      // spouse/sibling links are symmetric, so check both directions
+      (type !== 'parent' && l.source === targetId && l.target === sourceId)
+    ));
+  }
+
+  function lockToExisting(node){
+    selectedExistingId = node.id;
+    nameInput.value = node.name;
+    suggestionsEl.classList.remove('open');
+    suggestionsEl.innerHTML = '';
+    existingNoteEl.classList.add('open');
+    birthInput.disabled = true;
+    deathInput.disabled = true;
+    genderInput.disabled = true;
+    maidenInput.disabled = true;
+    birthplaceInput.disabled = true;
+  }
+
+  function unlockExisting(){
+    selectedExistingId = null;
+    existingNoteEl.classList.remove('open');
+    birthInput.disabled = false;
+    deathInput.disabled = false;
+    genderInput.disabled = false;
+    maidenInput.disabled = false;
+    birthplaceInput.disabled = false;
+  }
+
+  function updateSuggestions(){
+    const q = nameInput.value.trim().toLowerCase();
+    suggestionsEl.innerHTML = '';
+    if (!q){ suggestionsEl.classList.remove('open'); return; }
+    const matches = nodes
+      .filter(n => n.id !== pendingSourceId &&
+        (n.name.toLowerCase().includes(q) || (n.maidenName && n.maidenName.toLowerCase().includes(q))))
+      .slice(0, 6);
+    if (!matches.length){ suggestionsEl.classList.remove('open'); return; }
+    matches.forEach(m => {
+      const item = document.createElement('div');
+      item.className = 'suggestion-item';
+      const dates = (m.birth || m.death) ? `${m.birth || '?'}\u2013${m.death || 'living'}` : '';
+      const maiden = m.maidenName ? ` (n\u00e9e ${m.maidenName})` : '';
+      item.innerHTML = `${escapeHtml(m.name)}${escapeHtml(maiden)}${dates ? `<span class="s-dates">${escapeHtml(dates)}</span>` : ''}`;
+      item.addEventListener('click', () => lockToExisting(m));
+      suggestionsEl.appendChild(item);
+    });
+    suggestionsEl.classList.add('open');
+  }
+
+  nameInput.addEventListener('input', () => {
+    if (selectedExistingId) unlockExisting();
+    updateSuggestions();
+  });
+  document.getElementById('clear-existing').addEventListener('click', (e) => {
+    e.preventDefault();
+    unlockExisting();
+    nameInput.value = '';
+    nameInput.focus();
+  });
+  document.addEventListener('click', (e) => {
+    if (e.target !== nameInput && !e.target.closest('#name-suggestions')){
+      suggestionsEl.classList.remove('open');
+    }
+  });
+
+  function openModal(sourceId){
+    pendingSourceId = sourceId;
+    if (sourceId === null){
+      modalTitle.textContent = 'Add the first person';
+      relationField.style.display = 'none';
+    } else {
+      const src = nodeById(sourceId);
+      modalTitle.textContent = 'Add relative of ' + (src ? src.name : '');
+      relationField.style.display = 'block';
+    }
+    form.reset();
+    unlockExisting();
+    suggestionsEl.classList.remove('open');
+    overlay.classList.add('open');
+    nameInput.focus();
+  }
+  let reopenEditAfterModal = null; // personId to return to the edit modal for, or null
+
+  function closeModal(){
+    overlay.classList.remove('open');
+    pendingSourceId = null;
+    if (reopenEditAfterModal){
+      const id = reopenEditAfterModal;
+      reopenEditAfterModal = null;
+      openEditModal(id);
+    }
+  }
+
+  document.getElementById('btn-cancel').addEventListener('click', closeModal);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+  ghostCard.addEventListener('click', () => openModal(null));
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = nameInput.value.trim();
+    if (!name) return;
+    const relation = relationSelect.value;
+    const src = pendingSourceId !== null ? nodeById(pendingSourceId) : null;
+
+    let targetId = selectedExistingId;
+    let targetX, targetY;
+
+    try {
+      if (!targetId){
+        // Creating a brand new person
+        const birth = birthInput.value;
+        const death = deathInput.value;
+        const gender = genderInput.value;
+        const maidenName = maidenInput.value.trim();
+        const birthPlace = birthplaceInput.value.trim();
+
+        let x, y;
+        if (src){
+          const off = OFFSETS[relation];
+          const jitterX = (Math.random() * 30 - 15);
+          const jitterY = (Math.random() * 30 - 15);
+          x = clamp(src.x + off.dx + jitterX, CARD_W, WORLD_W - CARD_W);
+          y = clamp(src.y + off.dy + jitterY, CARD_H, WORLD_H - CARD_H);
+        } else {
+          x = CENTER_X; y = CENTER_Y;
+        }
+
+        const newRef = doc(peopleCol);
+        targetId = newRef.id;
+        targetX = x; targetY = y;
+        await setDoc(newRef, {
+          name,
+          birth: birth ? Number(birth) : null,
+          death: death ? Number(death) : null,
+          gender,
+          maidenName: maidenName || null,
+          birthPlace: birthPlace || null,
+          rotation: (Math.random() * 6 - 3),
+          x, y
+        });
+      } else {
+        const existing = nodeById(targetId);
+        targetX = existing ? existing.x : CENTER_X;
+        targetY = existing ? existing.y : CENTER_Y;
+      }
+
+      if (src && targetId !== src.id){
+        const addLink = async (s, t, type) => {
+          if (linkExists(s, t, type)) return;
+          await setDoc(doc(linksCol), { source: s, target: t, type });
+        };
+
+        if (relation === 'parent'){
+          await addLink(targetId, src.id, 'parent');
+        } else if (relation === 'child'){
+          await addLink(src.id, targetId, 'parent');
+        } else if (relation === 'spouse'){
+          await addLink(src.id, targetId, 'spouse');
+        } else if (relation === 'sibling'){
+          const parentIds = links
+            .filter(l => l.type === 'parent' && l.target === src.id)
+            .map(l => l.source);
+          if (parentIds.length){
+            for (const pid of parentIds) await addLink(pid, targetId, 'parent');
+          } else {
+            await addLink(src.id, targetId, 'sibling');
+          }
+        }
+      }
+
+      closeModal();
+      centerOn(targetX, targetY);
+    } catch (err){
+      console.error('Failed to save to Firestore', err);
+      setSyncStatus('error', 'Save failed — check connection');
+    }
+  });
+
+  // ---------- Firestore sync ----------
+  function setSyncStatus(state, label){
+    syncStatusEl.className = 'sync-status ' + state;
+    syncLabelEl.textContent = label;
+  }
+
+  function startSync(){
+    onSnapshot(peopleCol, (snap) => {
+      nodes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderAll();
+      setSyncStatus('synced', 'Synced');
+    }, (err) => {
+      console.error('People sync error', err);
+      setSyncStatus('error', 'Sync error — check Firestore rules');
+    });
+
+    onSnapshot(linksCol, (snap) => {
+      links = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderAll();
+      if (editOverlay.classList.contains('open')) renderEditRelationsList();
+      setSyncStatus('synced', 'Synced');
+    }, (err) => {
+      console.error('Links sync error', err);
+      setSyncStatus('error', 'Sync error — check Firestore rules');
+    });
+
+    onSnapshot(eventsCol, (snap) => {
+      events = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (editOverlay.classList.contains('open')) renderEditEventsList();
+      if (timelineOverlay.classList.contains('open') && currentTimelinePersonId){
+        openTimelineModal(currentTimelinePersonId);
+      }
+      setSyncStatus('synced', 'Synced');
+    }, (err) => {
+      console.error('Events sync error', err);
+      setSyncStatus('error', 'Sync error — check Firestore rules');
+    });
+  }
+
+  // ---------- Init ----------
+  attachPan();
+  ghostCard.style.left = (CENTER_X - 85) + 'px';
+  ghostCard.style.top = (CENTER_Y - 60) + 'px';
+  canvasEl.scrollTo({ left: CENTER_X - canvasEl.clientWidth / 2, top: CENTER_Y - canvasEl.clientHeight / 2 });
+  renderAll(); // show ghost card immediately, don't wait on the network
+
+  setSyncStatus('connecting', 'Connecting...');
+  onAuthStateChanged(auth, (user) => {
+    if (user) startSync();
+  });
+  signInAnonymously(auth).catch(err => {
+    console.error('Anonymous sign-in failed', err);
+    setSyncStatus('error', 'Sign-in failed — see console');
+  });
+
+})();
+</script>
+</body>
+</html>

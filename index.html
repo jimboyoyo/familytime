@@ -56,8 +56,9 @@
   #canvas{
     position:fixed;
     top:56px; left:0; right:0; bottom:0;
-    overflow:auto;
+    overflow:hidden;
     cursor:grab;
+    touch-action:none;
     background-color:var(--board-bg-1);
     background-image:
       repeating-linear-gradient(45deg, rgba(255,255,255,0.035) 0px, rgba(255,255,255,0.035) 2px, transparent 2px, transparent 6px),
@@ -69,7 +70,9 @@
     position:relative;
     width:4000px;
     height:3000px;
+    transform-origin:0 0;
   }
+  #world.smooth{ transition:transform 0.18s ease-out; }
 
   #links-svg{
     position:absolute; top:0; left:0;
@@ -696,6 +699,7 @@ const eventsCol = collection(db, 'events');
     nodes.forEach(n => {
       const card = document.createElement('div');
       card.className = 'card';
+      card.dataset.personId = n.id;
 
       const pin = document.createElement('div');
       pin.className = 'pin';
@@ -740,6 +744,17 @@ const eventsCol = collection(db, 'events');
     updatePositions();
   }
 
+  // ---------- Camera (pan + zoom) ----------
+  // Everything below is in "world space" (the fixed WORLD_W x WORLD_H
+  // coordinate system nodes live in). The camera maps world space to screen
+  // space via: screenX = worldX * camScale + camX  (and same for Y).
+  let camX = 0, camY = 0, camScale = 1;
+  const MIN_ZOOM = 0.3, MAX_ZOOM = 2.5;
+
+  function applyCamera(){
+    worldEl.style.transform = `translate(${camX}px, ${camY}px) scale(${camScale})`;
+  }
+
   // ---------- Drag ----------
   function attachDrag(cardEl, node){
     let startX, startY, startNodeX, startNodeY, dragging = false, moved = false;
@@ -760,8 +775,11 @@ const eventsCol = collection(db, 'events');
       if (!dragging) return;
       const dx = e.clientX - startX, dy = e.clientY - startY;
       if (Math.hypot(dx, dy) > 4) moved = true; // small threshold = still a "click"
-      node.x = clamp(startNodeX + dx, CARD_W, WORLD_W - CARD_W);
-      node.y = clamp(startNodeY + dy, CARD_H, WORLD_H - CARD_H);
+      // Mouse movement is in screen pixels; divide by the zoom level to get
+      // the equivalent movement in world-space units, so the card tracks
+      // the cursor accurately at any zoom level.
+      node.x = clamp(startNodeX + dx / camScale, CARD_W, WORLD_W - CARD_W);
+      node.y = clamp(startNodeY + dy / camScale, CARD_H, WORLD_H - CARD_H);
       updatePositions();
     });
 
@@ -783,17 +801,18 @@ const eventsCol = collection(db, 'events');
 
   function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
 
-  // ---------- Scrolling to a point ----------
+  // ---------- Moving the camera to a point ----------
   function centerOn(x, y){
-    const targetLeft = clamp(x - canvasEl.clientWidth / 2, 0, WORLD_W - canvasEl.clientWidth);
-    const targetTop = clamp(y - canvasEl.clientHeight / 2, 0, WORLD_H - canvasEl.clientHeight);
-    canvasEl.scrollTo({ left: targetLeft, top: targetTop, behavior: 'smooth' });
+    camX = canvasEl.clientWidth / 2 - x * camScale;
+    camY = canvasEl.clientHeight / 2 - y * camScale;
+    worldEl.classList.add('smooth');
+    applyCamera();
   }
 
   // ---------- Background pan (click-and-drag to move the view) ----------
   function attachPan(){
     let panning = false;
-    let startX, startY, startScrollLeft, startScrollTop;
+    let startX, startY, startCamX, startCamY;
 
     canvasEl.addEventListener('mousedown', (e) => {
       // Only pan when the mousedown is on empty board, not on a card
@@ -802,22 +821,216 @@ const eventsCol = collection(db, 'events');
       if (e.target.closest('.card')) return;
       panning = true;
       canvasEl.classList.add('panning');
+      worldEl.classList.remove('smooth'); // instant tracking while dragging
       startX = e.clientX; startY = e.clientY;
-      startScrollLeft = canvasEl.scrollLeft;
-      startScrollTop = canvasEl.scrollTop;
+      startCamX = camX; startCamY = camY;
       e.preventDefault();
     });
 
     window.addEventListener('mousemove', (e) => {
       if (!panning) return;
-      const dx = e.clientX - startX, dy = e.clientY - startY;
-      canvasEl.scrollLeft = startScrollLeft - dx;
-      canvasEl.scrollTop = startScrollTop - dy;
+      camX = startCamX + (e.clientX - startX);
+      camY = startCamY + (e.clientY - startY);
+      applyCamera();
     });
 
     window.addEventListener('mouseup', () => {
       if (!panning) return;
       panning = false;
+      canvasEl.classList.remove('panning');
+    });
+  }
+
+  // ---------- Zoom (mouse wheel) ----------
+  function attachZoom(){
+    canvasEl.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const rect = canvasEl.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      // The world-space point currently under the cursor, so we can keep
+      // it fixed under the cursor after rescaling (zoom "toward" the mouse
+      // rather than toward the top-left corner).
+      const worldX = (mouseX - camX) / camScale;
+      const worldY = (mouseY - camY) / camScale;
+
+      // Proportional to scroll amount — feels smooth on both notchy mouse
+      // wheels and continuous trackpad scrolling.
+      const zoomFactor = Math.pow(1.0015, -e.deltaY);
+      const newScale = clamp(camScale * zoomFactor, MIN_ZOOM, MAX_ZOOM);
+
+      camX = mouseX - worldX * newScale;
+      camY = mouseY - worldY * newScale;
+      camScale = newScale;
+
+      worldEl.classList.add('smooth');
+      applyCamera();
+    }, { passive: false });
+  }
+
+  // ---------- Touch (mobile): pan, long-press-to-drag, pinch-to-zoom ----------
+  const LONG_PRESS_MS = 420;
+  const LONG_PRESS_MOVE_CANCEL = 10; // px of drift before a pending long-press is abandoned
+
+  function attachTouch(){
+    let longPressTimer = null;
+    let pendingCardEl = null, pendingNode = null;
+    let touchStartX = 0, touchStartY = 0;
+
+    let cardDragActive = false;
+    let dragStart = { x: 0, y: 0, nodeX: 0, nodeY: 0 };
+
+    let panActive = false;
+    let panStart = { x: 0, y: 0, camX: 0, camY: 0 };
+
+    let pinchActive = false;
+    let pinchStartDist = 0, pinchStartScale = 1;
+    let pinchStartMid = { x: 0, y: 0 }, pinchStartCam = { x: 0, y: 0 };
+
+    function dist(t1, t2){ return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY); }
+    function mid(t1, t2){ return { x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 }; }
+
+    function clearPending(){
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+      pendingCardEl = null;
+      pendingNode = null;
+    }
+
+    canvasEl.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2){
+        // A second finger landed — cancel any pending tap/drag and start a pinch.
+        clearPending();
+        cardDragActive = false;
+        panActive = false;
+        canvasEl.classList.remove('panning');
+        pinchActive = true;
+        const [t1, t2] = e.touches;
+        pinchStartDist = dist(t1, t2);
+        pinchStartScale = camScale;
+        pinchStartMid = mid(t1, t2);
+        pinchStartCam = { x: camX, y: camY };
+        worldEl.classList.remove('smooth');
+        e.preventDefault();
+        return;
+      }
+
+      if (e.touches.length !== 1 || pinchActive) return;
+
+      const touch = e.touches[0];
+      const target = touch.target;
+      if (target.closest('.add-btn')) return; // let the button's own tap handling proceed untouched
+
+      const cardEl = target.closest('.card');
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
+
+      if (cardEl){
+        const node = nodeById(cardEl.dataset.personId);
+        if (!node) return;
+        e.preventDefault(); // avoid iOS text-selection/callout during the hold
+        pendingCardEl = cardEl;
+        pendingNode = node;
+        longPressTimer = setTimeout(() => {
+          longPressTimer = null;
+          cardDragActive = true;
+          dragStart = { x: touchStartX, y: touchStartY, nodeX: node.x, nodeY: node.y };
+          cardEl.classList.add('dragging');
+        }, LONG_PRESS_MS);
+      } else if (!target.closest('#ghost-card')){
+        // Empty background — pan starts immediately, same as a mouse drag.
+        panActive = true;
+        canvasEl.classList.add('panning');
+        worldEl.classList.remove('smooth');
+        panStart = { x: touch.clientX, y: touch.clientY, camX, camY };
+      }
+    }, { passive: false });
+
+    window.addEventListener('touchmove', (e) => {
+      if (pinchActive && e.touches.length === 2){
+        e.preventDefault();
+        const [t1, t2] = e.touches;
+        const newDist = dist(t1, t2);
+        const newMid = mid(t1, t2);
+        const scaleFactor = newDist / pinchStartDist;
+        const newScale = clamp(pinchStartScale * scaleFactor, MIN_ZOOM, MAX_ZOOM);
+        // Keep the pinch's starting midpoint anchored under the fingers,
+        // and follow however the midpoint itself has moved (pan + zoom combined).
+        const worldX = (pinchStartMid.x - pinchStartCam.x) / pinchStartScale;
+        const worldY = (pinchStartMid.y - pinchStartCam.y) / pinchStartScale;
+        camX = newMid.x - worldX * newScale;
+        camY = newMid.y - worldY * newScale;
+        camScale = newScale;
+        applyCamera();
+        return;
+      }
+
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0];
+
+      if (cardDragActive && pendingNode){
+        e.preventDefault();
+        const dx = touch.clientX - dragStart.x, dy = touch.clientY - dragStart.y;
+        pendingNode.x = clamp(dragStart.nodeX + dx / camScale, CARD_W, WORLD_W - CARD_W);
+        pendingNode.y = clamp(dragStart.nodeY + dy / camScale, CARD_H, WORLD_H - CARD_H);
+        updatePositions();
+        return;
+      }
+
+      if (longPressTimer){
+        // Finger drifted before the hold registered — treat as an abandoned
+        // tap rather than a drag (this deliberately does NOT fall back to
+        // panning: press-and-hold is the dedicated "move this card" gesture).
+        const dx = touch.clientX - touchStartX, dy = touch.clientY - touchStartY;
+        if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_CANCEL) clearPending();
+        return;
+      }
+
+      if (panActive){
+        e.preventDefault();
+        camX = panStart.camX + (touch.clientX - panStart.x);
+        camY = panStart.camY + (touch.clientY - panStart.y);
+        applyCamera();
+      }
+    }, { passive: false });
+
+    window.addEventListener('touchend', (e) => {
+      if (pinchActive){
+        if (e.touches.length < 2) pinchActive = false;
+        return;
+      }
+
+      if (cardDragActive && pendingNode){
+        pendingCardEl.classList.remove('dragging');
+        updateDoc(doc(peopleCol, pendingNode.id), { x: pendingNode.x, y: pendingNode.y }).catch(err => {
+          console.error('Failed to save position', err);
+        });
+        cardDragActive = false;
+        pendingCardEl = null; pendingNode = null;
+        return;
+      }
+
+      if (longPressTimer){
+        // Long-press never fired — this was a genuine tap.
+        e.preventDefault();
+        const tappedNode = pendingNode;
+        clearPending();
+        if (tappedNode) openTimelineModal(tappedNode.id);
+        return;
+      }
+
+      if (panActive){
+        panActive = false;
+        canvasEl.classList.remove('panning');
+      }
+    }, { passive: false });
+
+    window.addEventListener('touchcancel', () => {
+      clearPending();
+      cardDragActive = false;
+      panActive = false;
+      pinchActive = false;
       canvasEl.classList.remove('panning');
     });
   }
@@ -1343,9 +1556,13 @@ const eventsCol = collection(db, 'events');
 
   // ---------- Init ----------
   attachPan();
+  attachZoom();
+  attachTouch();
   ghostCard.style.left = (CENTER_X - 85) + 'px';
   ghostCard.style.top = (CENTER_Y - 60) + 'px';
-  canvasEl.scrollTo({ left: CENTER_X - canvasEl.clientWidth / 2, top: CENTER_Y - canvasEl.clientHeight / 2 });
+  camX = canvasEl.clientWidth / 2 - CENTER_X * camScale;
+  camY = canvasEl.clientHeight / 2 - CENTER_Y * camScale;
+  applyCamera();
   renderAll(); // show ghost card immediately, don't wait on the network
 
   setSyncStatus('connecting', 'Connecting...');

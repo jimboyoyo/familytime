@@ -37,6 +37,19 @@
   }
   #toolbar .title{ font-family:var(--font-display); font-size:19px; letter-spacing:1px; }
   #toolbar .count{ margin-left:auto; font-size:12px; color:#b8ad95; }
+  .arrange-select{
+    background:var(--panel-bg);
+    color:var(--panel-ink);
+    border:1px solid rgba(255,255,255,0.25);
+    border-radius:4px;
+    font-family:var(--font-ui);
+    font-size:12px;
+    padding:5px 8px;
+    cursor:pointer;
+  }
+  .arrange-select:hover{ border-color:rgba(255,255,255,0.5); }
+  .arrange-select:focus{ outline:none; border-color:var(--accent); }
+
   .sync-status{
     display:flex; align-items:center; gap:6px;
     font-size:11px; color:#b8ad95;
@@ -367,6 +380,12 @@
     <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-spouse)"></span>Spouse</div>
     <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-sibling);border-top:2px dashed var(--thread-sibling);height:0;"></span>Sibling</div>
   </div>
+  <select id="arrange-select" class="arrange-select">
+    <option value="" selected>Arrange...</option>
+    <option value="generational">Generational tree</option>
+    <option value="chronological">Chronological (birth year)</option>
+    <option value="clusters">Connection clusters</option>
+  </select>
   <div class="count" id="person-count">0 people</div>
   <div class="sync-status" id="sync-status"><span class="sync-dot"></span><span id="sync-label">Connecting...</span></div>
 </div>
@@ -527,7 +546,7 @@ import {
   getAuth, signInAnonymously, onAuthStateChanged
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js';
 import {
-  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js';
 
 // Your web app's Firebase configuration.
@@ -800,6 +819,296 @@ const eventsCol = collection(db, 'events');
   }
 
   function clamp(v, min, max){ return Math.max(min, Math.min(max, v)); }
+
+  // ---------- Auto-arrange ----------
+  const ROW_HEIGHT = 220;
+  const COL_WIDTH = 190;
+  const FAMILY_GAP = 90; // extra horizontal gap between different family clusters in a row
+
+  function buildUndirectedAdjacency(){
+    const adj = {};
+    nodes.forEach(n => { adj[n.id] = []; });
+    links.forEach(l => {
+      if (adj[l.source]) adj[l.source].push(l.target);
+      if (adj[l.target]) adj[l.target].push(l.source);
+    });
+    return adj;
+  }
+
+  // Groups people into connected "families" (anyone reachable via any kind
+  // of link), so generational/chronological layouts can keep each family
+  // clustered together horizontally instead of interleaving unrelated ones.
+  function computeComponents(){
+    const adj = buildUndirectedAdjacency();
+    const compOf = {};
+    let compIndex = 0;
+    nodes.forEach(n => {
+      if (compOf[n.id] !== undefined) return;
+      const queue = [n.id];
+      compOf[n.id] = compIndex;
+      while (queue.length){
+        const cur = queue.shift();
+        (adj[cur] || []).forEach(other => {
+          if (compOf[other] === undefined){
+            compOf[other] = compIndex;
+            queue.push(other);
+          }
+        });
+      }
+      compIndex++;
+    });
+    return compOf;
+  }
+
+  // Assigns each person a generation number by walking parent/child links
+  // (+1 per generation down), keeping spouses and bare-sibling links level
+  // (delta 0). Each connected family is normalized independently so its
+  // eldest known ancestor sits at generation 0 — unrelated families aren't
+  // necessarily "the same era", just visually aligned for readability.
+  function computeGenerations(){
+    const adj = {};
+    nodes.forEach(n => { adj[n.id] = []; });
+    function addEdge(a, b, delta){
+      if (adj[a]) adj[a].push({ other: b, delta });
+      if (adj[b]) adj[b].push({ other: a, delta: -delta });
+    }
+    links.forEach(l => {
+      if (l.type === 'parent') addEdge(l.source, l.target, 1);
+      else addEdge(l.source, l.target, 0);
+    });
+
+    const gen = {};
+    const visited = new Set();
+    nodes.forEach(n => {
+      if (visited.has(n.id)) return;
+      gen[n.id] = 0;
+      visited.add(n.id);
+      const queue = [n.id];
+      const componentIds = [n.id];
+      let minGen = 0;
+      while (queue.length){
+        const cur = queue.shift();
+        (adj[cur] || []).forEach(edge => {
+          if (!visited.has(edge.other)){
+            gen[edge.other] = gen[cur] + edge.delta;
+            minGen = Math.min(minGen, gen[edge.other]);
+            visited.add(edge.other);
+            queue.push(edge.other);
+            componentIds.push(edge.other);
+          }
+        });
+      }
+      componentIds.forEach(id => { gen[id] -= minGen; });
+    });
+    return gen;
+  }
+
+  function arrangeGenerational(){
+    const gen = computeGenerations();
+    const compOf = computeComponents();
+
+    const rows = {};
+    nodes.forEach(n => {
+      const g = gen[n.id] || 0;
+      (rows[g] = rows[g] || []).push(n);
+    });
+
+    const updates = {};
+    const sortedGenKeys = Object.keys(rows).map(Number).sort((a, b) => a - b);
+
+    sortedGenKeys.forEach((g, rowIndex) => {
+      const rowNodes = rows[g].slice().sort((a, b) => {
+        const ca = compOf[a.id], cb = compOf[b.id];
+        if (ca !== cb) return ca - cb; // keep each family contiguous
+        const ba = a.birth || 9999, bb = b.birth || 9999;
+        if (ba !== bb) return ba - bb; // eldest-first within a family
+        return a.name.localeCompare(b.name);
+      });
+
+      let x = 0, lastComp = null;
+      const xs = [];
+      rowNodes.forEach(n => {
+        const c = compOf[n.id];
+        if (lastComp !== null && c !== lastComp) x += FAMILY_GAP;
+        xs.push(x);
+        x += COL_WIDTH;
+        lastComp = c;
+      });
+      const totalWidth = x - COL_WIDTH;
+      const offsetX = CENTER_X - totalWidth / 2;
+      const rowY = CENTER_Y + (rowIndex - (sortedGenKeys.length - 1) / 2) * ROW_HEIGHT;
+
+      rowNodes.forEach((n, i) => {
+        updates[n.id] = {
+          x: clamp(offsetX + xs[i], CARD_W, WORLD_W - CARD_W),
+          y: clamp(rowY, CARD_H, WORLD_H - CARD_H)
+        };
+      });
+    });
+
+    return updates;
+  }
+
+  // Vertical position proportional to birth year (a literal timeline);
+  // people born close together get pulled into the same horizontal "band"
+  // so they don't overlap. Anyone with no recorded birth year gets their
+  // own row at the very bottom rather than being silently dropped.
+  function arrangeChronological(){
+    const PIXELS_PER_YEAR = 14;
+    const BAND_GAP_THRESHOLD = CARD_H * 1.3;
+
+    const known = nodes.filter(n => n.birth != null)
+      .slice().sort((a, b) => (a.birth - b.birth) || a.name.localeCompare(b.name));
+    const unknown = nodes.filter(n => n.birth == null);
+
+    const bands = [];
+    let currentBand = null, lastY = null;
+    known.forEach(n => {
+      const idealY = n.birth * PIXELS_PER_YEAR;
+      if (currentBand === null || (idealY - lastY) >= BAND_GAP_THRESHOLD){
+        currentBand = { y: idealY, members: [] };
+        bands.push(currentBand);
+      }
+      currentBand.members.push(n);
+      lastY = idealY;
+    });
+
+    const updates = {};
+    const minBandY = bands.length ? bands[0].y : 0;
+    const TOP = 200;
+
+    bands.forEach(band => {
+      const totalWidth = (band.members.length - 1) * COL_WIDTH;
+      const startX = CENTER_X - totalWidth / 2;
+      band.members.forEach((n, i) => {
+        updates[n.id] = {
+          x: clamp(startX + i * COL_WIDTH, CARD_W, WORLD_W - CARD_W),
+          y: clamp(TOP + (band.y - minBandY), CARD_H, WORLD_H - CARD_H)
+        };
+      });
+    });
+
+    if (unknown.length){
+      const lastBandY = bands.length ? (TOP + (bands[bands.length - 1].y - minBandY)) : TOP;
+      const unknownRowY = lastBandY + ROW_HEIGHT;
+      const totalWidth = (unknown.length - 1) * COL_WIDTH;
+      const startX = CENTER_X - totalWidth / 2;
+      unknown.forEach((n, i) => {
+        updates[n.id] = {
+          x: clamp(startX + i * COL_WIDTH, CARD_W, WORLD_W - CARD_W),
+          y: clamp(unknownRowY, CARD_H, WORLD_H - CARD_H)
+        };
+      });
+    }
+
+    return updates;
+  }
+
+  // One-shot force layout: pulls tightly-linked people together and lets
+  // loosely-connected people drift apart, starting from wherever they
+  // currently sit (so it settles rather than teleporting from scratch).
+  function arrangeClusters(){
+    const pos = {};
+    nodes.forEach(n => { pos[n.id] = { x: n.x, y: n.y, vx: 0, vy: 0 }; });
+    const ids = Object.keys(pos);
+
+    const REPULSION = 14000;
+    const LINK_DIST = { parent: 150, spouse: 100, sibling: 170 };
+    const LINK_STRENGTH = 0.02;
+    const DAMPING = 0.85;
+    const ITERATIONS = 220;
+
+    for (let iter = 0; iter < ITERATIONS; iter++){
+      for (let i = 0; i < ids.length; i++){
+        for (let j = i + 1; j < ids.length; j++){
+          const a = pos[ids[i]], b = pos[ids[j]];
+          const dx = a.x - b.x, dy = a.y - b.y;
+          const distSq = (dx * dx + dy * dy) || 0.01;
+          const dist = Math.sqrt(distSq);
+          const force = REPULSION / distSq;
+          const fx = (dx / dist) * force, fy = (dy / dist) * force;
+          a.vx += fx; a.vy += fy;
+          b.vx -= fx; b.vy -= fy;
+        }
+      }
+      links.forEach(l => {
+        const a = pos[l.source], b = pos[l.target];
+        if (!a || !b) return;
+        const targetDist = LINK_DIST[l.type] || 150;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy) || 0.01;
+        const diff = (dist - targetDist) * LINK_STRENGTH;
+        const fx = (dx / dist) * diff, fy = (dy / dist) * diff;
+        a.vx += fx; a.vy += fy;
+        b.vx -= fx; b.vy -= fy;
+      });
+      ids.forEach(id => {
+        const p = pos[id];
+        p.vx *= DAMPING; p.vy *= DAMPING;
+        p.x += p.vx; p.y += p.vy;
+        p.vx += (CENTER_X - p.x) * 0.0006;
+        p.vy += (CENTER_Y - p.y) * 0.0006;
+      });
+    }
+
+    const updates = {};
+    ids.forEach(id => {
+      const p = pos[id];
+      updates[id] = {
+        x: clamp(p.x, CARD_W, WORLD_W - CARD_W),
+        y: clamp(p.y, CARD_H, WORLD_H - CARD_H)
+      };
+    });
+    return updates;
+  }
+
+  function fitToPositions(posMap){
+    const vals = Object.values(posMap);
+    if (!vals.length) return;
+    const pad = 140;
+    const xs = vals.map(p => p.x), ys = vals.map(p => p.y);
+    const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
+    const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
+    const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+    const scale = clamp(Math.min(canvasEl.clientWidth / bw, canvasEl.clientHeight / bh), MIN_ZOOM, MAX_ZOOM);
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    camScale = scale;
+    camX = canvasEl.clientWidth / 2 - cx * scale;
+    camY = canvasEl.clientHeight / 2 - cy * scale;
+    worldEl.classList.add('smooth');
+    applyCamera();
+  }
+
+  async function applyArrangement(kind){
+    if (!nodes.length) return;
+    setSyncStatus('connecting', 'Arranging...');
+    await new Promise(r => setTimeout(r, 20)); // let the status text paint before the heavy work
+
+    let updates;
+    if (kind === 'generational') updates = arrangeGenerational();
+    else if (kind === 'chronological') updates = arrangeChronological();
+    else if (kind === 'clusters') updates = arrangeClusters();
+    else return;
+
+    try {
+      const batch = writeBatch(db);
+      Object.keys(updates).forEach(id => {
+        batch.update(doc(peopleCol, id), { x: updates[id].x, y: updates[id].y });
+      });
+      await batch.commit();
+      fitToPositions(updates);
+      setSyncStatus('synced', 'Synced');
+    } catch (err){
+      console.error('Failed to arrange', err);
+      setSyncStatus('error', 'Arrange failed \u2014 check connection');
+    }
+  }
+
+  document.getElementById('arrange-select').addEventListener('change', (e) => {
+    const kind = e.target.value;
+    e.target.value = ''; // reset — this is a one-shot action, not a persistent mode
+    if (kind) applyArrangement(kind);
+  });
 
   // ---------- Moving the camera to a point ----------
   function centerOn(x, y){

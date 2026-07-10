@@ -385,6 +385,7 @@
     <option value="generational">Generational tree</option>
     <option value="chronological">Chronological (birth year)</option>
     <option value="clusters">Connection clusters</option>
+    <option value="manual">Manual (reset to saved positions)</option>
   </select>
   <div class="count" id="person-count">0 people</div>
   <div class="sync-status" id="sync-status"><span class="sync-dot"></span><span id="sync-label">Connecting...</span></div>
@@ -546,7 +547,7 @@ import {
   getAuth, signInAnonymously, onAuthStateChanged
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js';
 import {
-  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js';
 
 // Your web app's Firebase configuration.
@@ -580,6 +581,33 @@ const eventsCol = collection(db, 'events');
   let nodes = [];       // {id, name, birth, death, gender, rotation, x, y}
   let links = [];       // {source, target, type: 'parent' | 'spouse' | 'sibling'}
   let events = [];      // {id, personId, year, description, evidence, createdAt}
+  let localPositionOverrides = {}; // id -> {x,y}; session-only, never written to Firestore
+  let savedPositions = {}; // id -> {x,y}; last known real (Firestore) positions, pre-override
+
+  // Applies any active local overrides on top of freshly-synced node data,
+  // so a locally-arranged layout survives realtime refreshes triggered by
+  // unrelated changes elsewhere on the board.
+  function applyLocalOverrides(){
+    nodes.forEach(n => {
+      const ov = localPositionOverrides[n.id];
+      if (ov){ n.x = ov.x; n.y = ov.y; }
+    });
+  }
+
+  // "Manual" option: discard any local-only arrangement and snap everyone
+  // back to their actual saved positions.
+  function resetToSavedPositions(){
+    localPositionOverrides = {};
+    nodes.forEach(n => {
+      const saved = savedPositions[n.id];
+      if (saved){ n.x = saved.x; n.y = saved.y; }
+    });
+    renderAll();
+    const posMap = {};
+    nodes.forEach(n => { posMap[n.id] = { x: n.x, y: n.y }; });
+    fitToPositions(posMap);
+    setSyncStatus('synced', 'Synced');
+  }
 
   const genderColor = { f:'#a2456b', m:'#3a5b8b', o:'#7a5ba8', u:'#8a8478' };
 
@@ -807,6 +835,9 @@ const eventsCol = collection(db, 'events');
       dragging = false;
       cardEl.classList.remove('dragging');
       if (moved){
+        // A manual drag is an explicit edit, so this card "graduates" out
+        // of any local-only arrangement and gets a real saved position.
+        delete localPositionOverrides[node.id];
         // Only write the final position once the drag ends, not on every
         // mousemove — that would flood Firestore with writes.
         updateDoc(doc(peopleCol, node.id), { x: node.x, y: node.y }).catch(err => {
@@ -1090,24 +1121,26 @@ const eventsCol = collection(db, 'events');
     else if (kind === 'clusters') updates = arrangeClusters();
     else return;
 
-    try {
-      const batch = writeBatch(db);
-      Object.keys(updates).forEach(id => {
-        batch.update(doc(peopleCol, id), { x: updates[id].x, y: updates[id].y });
-      });
-      await batch.commit();
-      fitToPositions(updates);
-      setSyncStatus('synced', 'Synced');
-    } catch (err){
-      console.error('Failed to arrange', err);
-      setSyncStatus('error', 'Arrange failed \u2014 check connection');
-    }
+    // Local-only: this rearranges the board just for you, without writing
+    // to Firestore, so it won't move anything for other people viewing or
+    // editing the tree. Positions are held in memory for this session and
+    // reapplied automatically if a sync refresh would otherwise overwrite
+    // them (e.g. someone else adds a person elsewhere on the board).
+    // Dragging a specific card afterward still saves for real, since a
+    // manual drag is an explicit, intentional edit.
+    localPositionOverrides = {};
+    Object.keys(updates).forEach(id => { localPositionOverrides[id] = updates[id]; });
+    applyLocalOverrides();
+    renderAll();
+    fitToPositions(updates);
+    setSyncStatus('synced', 'Arranged (not saved)');
   }
 
   document.getElementById('arrange-select').addEventListener('change', (e) => {
     const kind = e.target.value;
     e.target.value = ''; // reset — this is a one-shot action, not a persistent mode
-    if (kind) applyArrangement(kind);
+    if (kind === 'manual') resetToSavedPositions();
+    else if (kind) applyArrangement(kind);
   });
 
   // ---------- Moving the camera to a point ----------
@@ -1312,6 +1345,7 @@ const eventsCol = collection(db, 'events');
 
       if (cardDragActive && pendingNode){
         pendingCardEl.classList.remove('dragging');
+        delete localPositionOverrides[pendingNode.id];
         updateDoc(doc(peopleCol, pendingNode.id), { x: pendingNode.x, y: pendingNode.y }).catch(err => {
           console.error('Failed to save position', err);
         });
@@ -1833,6 +1867,19 @@ const eventsCol = collection(db, 'events');
   function startSync(){
     onSnapshot(peopleCol, (snap) => {
       nodes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Remember the real saved positions (pre-override) so "Manual" can
+      // restore to them later without needing another round trip.
+      nodes.forEach(n => { savedPositions[n.id] = { x: n.x, y: n.y }; });
+      // Drop overrides for anyone no longer on the board, then reapply
+      // whatever's left on top of the freshly-synced positions.
+      const currentIds = new Set(nodes.map(n => n.id));
+      Object.keys(localPositionOverrides).forEach(id => {
+        if (!currentIds.has(id)) delete localPositionOverrides[id];
+      });
+      Object.keys(savedPositions).forEach(id => {
+        if (!currentIds.has(id)) delete savedPositions[id];
+      });
+      applyLocalOverrides();
       renderAll();
       setSyncStatus('synced', 'Synced');
     }, (err) => {

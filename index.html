@@ -419,6 +419,7 @@
     <option value="manual">Manual (reset to saved positions)</option>
   </select>
   <button id="track-lineage-btn" type="button" class="toolbar-btn">Track lineage</button>
+  <button id="track-relation-btn" type="button" class="toolbar-btn">Track relation</button>
   <span id="tracking-hint" class="tracking-hint">Click a person to trace their ancestors</span>
   <div class="count" id="person-count">0 people</div>
   <div class="sync-status" id="sync-status"><span class="sync-dot"></span><span id="sync-label">Connecting...</span></div>
@@ -772,7 +773,7 @@ const eventsCol = collection(db, 'events');
       tag.textContent = sourceNode ? relationLabel(l.type, sourceNode) : '';
       worldEl.appendChild(tag);
 
-      linkEls.push({ el: path, tagEl: tag, sourceId: l.source, targetId: l.target, type: l.type });
+      linkEls.push({ el: path, tagEl: tag, sourceId: l.source, targetId: l.target, type: l.type, id: l.id });
     });
 
     // cards
@@ -822,7 +823,7 @@ const eventsCol = collection(db, 'events');
     ghostCard.style.display = nodes.length === 0 ? 'block' : 'none';
 
     updatePositions();
-    applyLineageHighlight(); // reapply if a lineage is currently being tracked
+    refreshTrackingHighlight(); // reapply if a lineage/relation is currently being tracked
   }
 
   // ---------- Camera (pan + zoom) ----------
@@ -879,6 +880,7 @@ const eventsCol = collection(db, 'events');
         });
       } else {
         if (trackingMode) setTrackedPerson(node.id);
+        else if (relationTrackingMode) handleRelationClick(node.id);
         else openTimelineModal(node.id);
       }
     });
@@ -1178,6 +1180,30 @@ const eventsCol = collection(db, 'events');
     else if (kind) applyArrangement(kind);
   });
 
+  // ---------- Tracking (shared highlight engine for both modes below) ----------
+  // Both "Track lineage" and "Track relation" highlight a set of people and
+  // the specific links connecting them, dimming everything else. This one
+  // function drives the actual DOM styling for either mode.
+  function applyPathHighlight(active, endpointIds, pathIds, linkIsHighlighted){
+    Object.values(cardEls).forEach(el => {
+      el.classList.remove('lineage-root', 'lineage-ancestor', 'lineage-dim');
+    });
+    linkEls.forEach(l => { l.el.classList.remove('thread-lineage', 'thread-dim'); });
+
+    if (!active) return;
+
+    Object.keys(cardEls).forEach(id => {
+      const el = cardEls[id];
+      if (endpointIds && endpointIds.has(id)) el.classList.add('lineage-root');
+      else if (pathIds && pathIds.has(id)) el.classList.add('lineage-ancestor');
+      else el.classList.add('lineage-dim');
+    });
+
+    linkEls.forEach(l => {
+      l.el.classList.add(linkIsHighlighted(l) ? 'thread-lineage' : 'thread-dim');
+    });
+  }
+
   // ---------- Lineage tracking ----------
   let trackingMode = false;
   let trackedRootId = null;
@@ -1201,52 +1227,213 @@ const eventsCol = collection(db, 'events');
     return ancestors;
   }
 
-  // Applies (or clears) the highlight/dim styling on current card and link
-  // elements. Called after every renderAll() so it survives incidental
-  // re-renders (e.g. someone else adding a person) while a lineage is
-  // actively being tracked.
-  function applyLineageHighlight(){
-    Object.values(cardEls).forEach(el => {
-      el.classList.remove('lineage-root', 'lineage-ancestor', 'lineage-dim');
-    });
-    linkEls.forEach(l => { l.el.classList.remove('thread-lineage', 'thread-dim'); });
-
-    if (!trackingMode || !trackedRootId || !cardEls[trackedRootId]) return;
-
-    const inLineage = (id) => id === trackedRootId || trackedAncestorIds.has(id);
-
-    Object.keys(cardEls).forEach(id => {
-      const el = cardEls[id];
-      if (id === trackedRootId) el.classList.add('lineage-root');
-      else if (trackedAncestorIds.has(id)) el.classList.add('lineage-ancestor');
-      else el.classList.add('lineage-dim');
-    });
-
-    linkEls.forEach(l => {
-      const isLineageLink = l.type === 'parent' && inLineage(l.targetId) && trackedAncestorIds.has(l.sourceId);
-      l.el.classList.add(isLineageLink ? 'thread-lineage' : 'thread-dim');
-    });
-  }
-
   function setTrackedPerson(personId){
     trackedRootId = personId;
     trackedAncestorIds = computeAncestors(personId);
-    applyLineageHighlight();
+    refreshTrackingHighlight();
   }
 
   function clearTracking(){
     trackedRootId = null;
     trackedAncestorIds = new Set();
-    applyLineageHighlight();
+    refreshTrackingHighlight();
+  }
+
+  // ---------- Relation tracking ----------
+  let relationTrackingMode = false;
+  let relationFirstId = null;
+  let relationPathIds = null;     // all node ids on the found path, including endpoints
+  let relationEndpointIds = null; // just the two chosen people
+  let relationPathLinkIds = null; // exact link ids used, so the right edges light up
+
+  // Shortest path between two people through ANY relationship type (parent,
+  // spouse, sibling) — this is what reveals things like "these two are
+  // cousins" (path goes up through parents to a shared ancestor, then back
+  // down) or "these two are connected by marriage".
+  function findRelationPath(idA, idB){
+    if (idA === idB) return null;
+    const adj = {};
+    nodes.forEach(n => { adj[n.id] = []; });
+    links.forEach(l => {
+      if (adj[l.source]) adj[l.source].push({ neighborId: l.target, linkId: l.id });
+      if (adj[l.target]) adj[l.target].push({ neighborId: l.source, linkId: l.id });
+    });
+
+    const visited = new Set([idA]);
+    const prev = {};
+    const queue = [idA];
+    while (queue.length){
+      const cur = queue.shift();
+      if (cur === idB) break;
+      (adj[cur] || []).forEach(({ neighborId, linkId }) => {
+        if (!visited.has(neighborId)){
+          visited.add(neighborId);
+          prev[neighborId] = { fromId: cur, linkId };
+          queue.push(neighborId);
+        }
+      });
+    }
+    if (!visited.has(idB)) return null;
+
+    const nodeIds = [idB];
+    const linkIds = [];
+    let cur = idB;
+    while (cur !== idA){
+      const p = prev[cur];
+      linkIds.push(p.linkId);
+      cur = p.fromId;
+      nodeIds.push(cur);
+    }
+    nodeIds.reverse();
+    linkIds.reverse();
+    return { nodeIds, linkIds };
+  }
+
+  function ordinalWord(n){
+    if (n === 1) return '1st';
+    if (n === 2) return '2nd';
+    if (n === 3) return '3rd';
+    return n + 'th';
+  }
+  function removalWord(r){
+    if (r === 0) return '';
+    if (r === 1) return ' once removed';
+    if (r === 2) return ' twice removed';
+    return ' ' + r + ' times removed';
+  }
+  function directAncestorWord(n){
+    if (n === 1) return 'parent and child';
+    if (n === 2) return 'grandparent and grandchild';
+    if (n === 3) return 'great-grandparent and great-grandchild';
+    return (n - 2) + 'x-great-grandparent and great-grandchild';
+  }
+
+  // Tries to give a precise relationship label (siblings, cousins, etc.)
+  // when the path is pure blood ancestry; falls back to something more
+  // general when the path runs through a marriage or a bare sibling link.
+  function describeRelationPath(nodeIds, linkIds){
+    const edges = linkIds.map((linkId, i) => {
+      const link = links.find(l => l.id === linkId);
+      if (!link) return null;
+      if (link.type !== 'parent') return { type: link.type };
+      const from = nodeIds[i];
+      return { type: 'parent', direction: link.source === from ? 'down' : 'up' };
+    });
+
+    if (edges.some(e => !e || e.type !== 'parent')){
+      return edges.some(e => e && e.type === 'spouse') ? 'Related by marriage' : 'Related';
+    }
+
+    let i = 0, upSteps = 0;
+    while (i < edges.length && edges[i].direction === 'up'){ upSteps++; i++; }
+    const downSteps = edges.length - upSteps;
+    for (let j = i; j < edges.length; j++){
+      if (edges[j].direction !== 'down') return 'Related'; // irregular path, skip precise labeling
+    }
+
+    if (upSteps === 0 || downSteps === 0) return directAncestorWord(Math.max(upSteps, downSteps));
+    if (upSteps === 1 && downSteps === 1) return 'Siblings';
+
+    const degree = Math.min(upSteps, downSteps) - 1;
+    const removal = Math.abs(upSteps - downSteps);
+    return ordinalWord(degree) + ' cousins' + removalWord(removal);
+  }
+
+  function handleRelationClick(personId){
+    if (!relationFirstId){
+      relationFirstId = personId;
+      relationPathIds = null; relationEndpointIds = null; relationPathLinkIds = null;
+      const p = nodeById(personId);
+      trackingHint.textContent = (p ? p.name : 'Selected') + ' \u2014 now click the second person';
+      refreshTrackingHighlight();
+      return;
+    }
+
+    const firstId = relationFirstId;
+    relationFirstId = null; // next click (after this) starts a fresh pair
+    if (firstId === personId){
+      trackingHint.textContent = 'Choose two different people \u2014 click the first one again';
+      return;
+    }
+
+    const result = findRelationPath(firstId, personId);
+    const nameA = (nodeById(firstId) || {}).name || 'That person';
+    const nameB = (nodeById(personId) || {}).name || 'this person';
+
+    if (!result){
+      relationPathIds = new Set([firstId, personId]);
+      relationEndpointIds = new Set([firstId, personId]);
+      relationPathLinkIds = new Set();
+      trackingHint.textContent = `No connection found between ${nameA} and ${nameB}`;
+    } else {
+      relationPathIds = new Set(result.nodeIds);
+      relationEndpointIds = new Set([firstId, personId]);
+      relationPathLinkIds = new Set(result.linkIds);
+      const label = describeRelationPath(result.nodeIds, result.linkIds);
+      trackingHint.textContent = `${nameA} & ${nameB}: ${label}`;
+    }
+    refreshTrackingHighlight();
+  }
+
+  function clearRelationTracking(){
+    relationFirstId = null;
+    relationPathIds = null; relationEndpointIds = null; relationPathLinkIds = null;
+    refreshTrackingHighlight();
+  }
+
+  // Decides which mode (if any) is active and drives the shared highlighter.
+  function refreshTrackingHighlight(){
+    if (trackingMode && trackedRootId && cardEls[trackedRootId]){
+      applyPathHighlight(true, new Set([trackedRootId]), trackedAncestorIds, (l) =>
+        l.type === 'parent' &&
+        (l.targetId === trackedRootId || trackedAncestorIds.has(l.targetId)) &&
+        trackedAncestorIds.has(l.sourceId)
+      );
+    } else if (relationTrackingMode && relationFirstId && !relationPathIds){
+      applyPathHighlight(true, new Set([relationFirstId]), new Set(), () => false);
+    } else if (relationTrackingMode && relationPathIds){
+      const middleOnly = new Set([...relationPathIds].filter(id => !relationEndpointIds.has(id)));
+      applyPathHighlight(true, relationEndpointIds, middleOnly, (l) => relationPathLinkIds.has(l.id));
+    } else {
+      applyPathHighlight(false);
+    }
   }
 
   const trackLineageBtn = document.getElementById('track-lineage-btn');
+  const trackRelationBtn = document.getElementById('track-relation-btn');
   const trackingHint = document.getElementById('tracking-hint');
+
   trackLineageBtn.addEventListener('click', () => {
     trackingMode = !trackingMode;
     trackLineageBtn.classList.toggle('active', trackingMode);
-    trackingHint.classList.toggle('show', trackingMode);
-    if (!trackingMode) clearTracking();
+    if (trackingMode){
+      relationTrackingMode = false;
+      trackRelationBtn.classList.remove('active');
+      clearRelationTracking();
+      trackingHint.textContent = 'Click a person to trace their ancestors';
+      trackingHint.classList.add('show');
+    } else {
+      trackingHint.classList.remove('show');
+      clearTracking();
+    }
+  });
+
+  trackRelationBtn.addEventListener('click', () => {
+    relationTrackingMode = !relationTrackingMode;
+    trackRelationBtn.classList.toggle('active', relationTrackingMode);
+    if (relationTrackingMode){
+      trackingMode = false;
+      trackLineageBtn.classList.remove('active');
+      clearTracking();
+      relationFirstId = null;
+      relationPathIds = null; relationEndpointIds = null; relationPathLinkIds = null;
+      trackingHint.textContent = 'Click the first person';
+      trackingHint.classList.add('show');
+      refreshTrackingHighlight();
+    } else {
+      trackingHint.classList.remove('show');
+      clearRelationTracking();
+    }
   });
 
   // ---------- Moving the camera to a point ----------
@@ -1467,6 +1654,7 @@ const eventsCol = collection(db, 'events');
         clearPending();
         if (tappedNode){
           if (trackingMode) setTrackedPerson(tappedNode.id);
+          else if (relationTrackingMode) handleRelationClick(tappedNode.id);
           else openTimelineModal(tappedNode.id);
         }
         return;

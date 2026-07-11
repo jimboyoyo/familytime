@@ -312,6 +312,10 @@
     font-family:var(--font-body); font-weight:700; color:var(--ink);
     white-space:nowrap; width:64px;
   }
+  #timeline-table td.tl-year .tl-year-value{ font-size:14px; }
+  #timeline-table td.tl-year .tl-year-age{
+    font-weight:400; font-size:10px; color:var(--ink-soft); margin-top:1px;
+  }
   #timeline-table td.tl-event{ color:var(--ink-soft); font-style:italic; word-wrap:break-word; }
   #timeline-table td.tl-evidence{ color:var(--ink-soft); word-wrap:break-word; }
   #timeline-table td.tl-evidence a{ color:var(--accent-dark); text-decoration:underline; }
@@ -1682,8 +1686,6 @@ const eventsCol = collection(db, 'events');
   const timelineTable = document.getElementById('timeline-table');
   const timelineTbody = document.getElementById('timeline-tbody');
   const timelineEmptyNote = document.getElementById('timeline-empty-note');
-
-  const MAX_TIMELINE_YEARS = 200; // sanity cap against bad/typo'd dates
   let currentTimelinePersonId = null;
 
   function eventsForPerson(personId){
@@ -1705,28 +1707,13 @@ const eventsCol = collection(db, 'events');
 
     timelineTbody.innerHTML = '';
 
-    if (!person.birth){
+    const personEvents = eventsForPerson(personId);
+    const eventYears = [...new Set(personEvents.map(e => e.year))].sort((a, b) => a - b);
+
+    if (!eventYears.length){
       timelineTable.style.display = 'none';
       timelineEmptyNote.style.display = 'block';
-      timelineEmptyNote.textContent = "This person's birth year isn't recorded, so a timeline can't be generated yet. Click the pencil icon to add one.";
-      timelineOverlay.classList.add('open');
-      return;
-    }
-
-    const endYear = person.death || new Date().getFullYear();
-
-    if (endYear < person.birth){
-      timelineTable.style.display = 'none';
-      timelineEmptyNote.style.display = 'block';
-      timelineEmptyNote.textContent = "The death year is earlier than the birth year \u2014 check these dates to generate a timeline.";
-      timelineOverlay.classList.add('open');
-      return;
-    }
-
-    if (endYear - person.birth > MAX_TIMELINE_YEARS){
-      timelineTable.style.display = 'none';
-      timelineEmptyNote.style.display = 'block';
-      timelineEmptyNote.textContent = `That's a ${endYear - person.birth}-year span \u2014 double check the birth/death years before generating a timeline this long.`;
+      timelineEmptyNote.textContent = 'No life events recorded yet. Click the pencil icon to add some.';
       timelineOverlay.classList.add('open');
       return;
     }
@@ -1734,11 +1721,10 @@ const eventsCol = collection(db, 'events');
     timelineTable.style.display = '';
     timelineEmptyNote.style.display = 'none';
 
-    const personEvents = eventsForPerson(personId);
-
-    for (let y = person.birth; y <= endYear; y++){
+    eventYears.forEach(y => {
       const yearEvents = personEvents.filter(e => e.year === y);
-      const rowCount = Math.max(1, yearEvents.length);
+      const rowCount = yearEvents.length;
+      const age = (person.birth != null) ? (y - person.birth) : null;
 
       for (let i = 0; i < rowCount; i++){
         const tr = document.createElement('tr');
@@ -1748,7 +1734,19 @@ const eventsCol = collection(db, 'events');
         if (i === 0){
           const tdYear = document.createElement('td');
           tdYear.className = 'tl-year';
-          tdYear.textContent = y;
+
+          const yearValue = document.createElement('div');
+          yearValue.className = 'tl-year-value';
+          yearValue.textContent = y;
+          tdYear.appendChild(yearValue);
+
+          if (age !== null){
+            const ageValue = document.createElement('div');
+            ageValue.className = 'tl-year-age';
+            ageValue.textContent = `(${age})`;
+            tdYear.appendChild(ageValue);
+          }
+
           if (rowCount > 1) tdYear.rowSpan = rowCount;
           tr.appendChild(tdYear);
         }
@@ -1756,11 +1754,11 @@ const eventsCol = collection(db, 'events');
         const ev = yearEvents[i];
         const tdEvent = document.createElement('td');
         tdEvent.className = 'tl-event';
-        tdEvent.textContent = ev ? ev.description : '\u2014';
+        tdEvent.textContent = ev.description;
 
         const tdEvidence = document.createElement('td');
         tdEvidence.className = 'tl-evidence';
-        const evidenceText = (ev && ev.evidence) ? ev.evidence.trim() : '';
+        const evidenceText = ev.evidence ? ev.evidence.trim() : '';
         if (evidenceText && /^https?:\/\//i.test(evidenceText)){
           const link = document.createElement('a');
           link.href = evidenceText;
@@ -1776,7 +1774,7 @@ const eventsCol = collection(db, 'events');
         tr.appendChild(tdEvidence);
         timelineTbody.appendChild(tr);
       }
-    }
+    });
 
     timelineOverlay.classList.add('open');
   }

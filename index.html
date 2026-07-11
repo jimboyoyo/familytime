@@ -290,7 +290,10 @@
   #timeline-close, #edit-close{ font-size:24px; }
 
   #timeline-body{ overflow-y:auto; }
-  #timeline-table{ width:100%; border-collapse:collapse; font-family:var(--font-ui); font-size:13px; }
+  #timeline-table{ width:100%; table-layout:fixed; border-collapse:collapse; font-family:var(--font-ui); font-size:13px; }
+  #timeline-table th:nth-child(1), #timeline-table td:nth-child(1){ width:66px; }
+  #timeline-table th:nth-child(2), #timeline-table td:nth-child(2){ width:56%; }
+  #timeline-table th:nth-child(3), #timeline-table td:nth-child(3){ width:auto; }
   #timeline-table thead th{
     position:sticky; top:0;
     background:var(--card-bg-edge);
@@ -309,8 +312,10 @@
     font-family:var(--font-body); font-weight:700; color:var(--ink);
     white-space:nowrap; width:64px;
   }
-  #timeline-table td.tl-event{ color:var(--ink-soft); font-style:italic; }
-  #timeline-table td.tl-evidence{ color:var(--ink-soft); }
+  #timeline-table td.tl-event{ color:var(--ink-soft); font-style:italic; word-wrap:break-word; }
+  #timeline-table td.tl-evidence{ color:var(--ink-soft); word-wrap:break-word; }
+  #timeline-table td.tl-evidence a{ color:var(--accent-dark); text-decoration:underline; }
+  #timeline-table td.tl-evidence a:hover{ color:var(--accent); }
   #timeline-table tbody tr:nth-child(even){ background:rgba(0,0,0,0.025); }
   #timeline-table tbody tr:hover{ background:rgba(138,106,52,0.09); }
 
@@ -1567,7 +1572,17 @@ const eventsCol = collection(db, 'events');
 
         const tdEvidence = document.createElement('td');
         tdEvidence.className = 'tl-evidence';
-        tdEvidence.textContent = (ev && ev.evidence) ? ev.evidence : '\u2014';
+        const evidenceText = (ev && ev.evidence) ? ev.evidence.trim() : '';
+        if (evidenceText && /^https?:\/\//i.test(evidenceText)){
+          const link = document.createElement('a');
+          link.href = evidenceText;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = evidenceText;
+          tdEvidence.appendChild(link);
+        } else {
+          tdEvidence.textContent = evidenceText || '\u2014';
+        }
 
         tr.appendChild(tdEvent);
         tr.appendChild(tdEvidence);

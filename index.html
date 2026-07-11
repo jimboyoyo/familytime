@@ -385,6 +385,17 @@
   }
   .btn-secondary:hover{ background:rgba(138,106,52,0.1); }
 
+  .event-form-actions{ display:flex; align-items:center; gap:10px; }
+  .event-form-actions .btn-secondary{ margin-top:8px; }
+  .btn-cancel-edit{
+    display:none;
+    background:none; border:none; color:var(--ink-soft);
+    font-family:var(--font-ui); font-size:12px; text-decoration:underline;
+    cursor:pointer; padding:0;
+  }
+  .btn-cancel-edit.show{ display:inline; }
+  .btn-cancel-edit:hover{ color:var(--ink); }
+
   .edit-list{ display:flex; flex-direction:column; gap:6px; }
   .edit-list-empty{ font-size:12px; color:var(--ink-soft); font-style:italic; padding:2px 0; }
   .edit-list-item{
@@ -399,6 +410,12 @@
   .edit-list-item .item-main{ flex:1; }
   .edit-list-item .item-year{ font-family:var(--font-body); font-weight:700; margin-right:6px; }
   .edit-list-item .item-sub{ color:var(--ink-soft); font-size:11px; margin-top:2px; }
+  .item-actions{ display:flex; gap:4px; flex-shrink:0; }
+  .item-edit{
+    background:none; border:none; color:var(--accent-dark);
+    font-size:13px; line-height:1; cursor:pointer; padding:0 2px;
+  }
+  .item-edit:hover{ color:var(--accent); }
   .item-remove{
     background:none; border:none; color:var(--thread-spouse);
     font-size:15px; line-height:1; cursor:pointer; padding:0 2px; flex-shrink:0;
@@ -571,7 +588,10 @@
           </div>
           <label for="event-evidence">Evidence (link or note)</label>
           <input id="event-evidence" type="text" placeholder="e.g. Parish register, St. Mary's, 1925">
-          <button type="submit" class="btn-secondary">+ Add event</button>
+          <div class="event-form-actions">
+            <button type="submit" class="btn-secondary" id="event-submit-btn">+ Add event</button>
+            <button type="button" class="btn-cancel-edit" id="event-cancel-edit-btn">Cancel edit</button>
+          </div>
         </form>
       </section>
 
@@ -1805,8 +1825,33 @@ const eventsCol = collection(db, 'events');
   const editAddRelationBtn = document.getElementById('edit-add-relation');
   const editEventsList = document.getElementById('edit-events-list');
   const editEventForm = document.getElementById('edit-event-form');
+  const eventSubmitBtn = document.getElementById('event-submit-btn');
+  const eventCancelEditBtn = document.getElementById('event-cancel-edit-btn');
+  const eventYearInput = document.getElementById('event-year');
+  const eventDescInput = document.getElementById('event-desc');
+  const eventEvidenceInput = document.getElementById('event-evidence');
 
   let currentEditPersonId = null;
+  let editingEventId = null; // set while the event form is editing an existing event rather than adding a new one
+
+  function startEditingEvent(ev){
+    editingEventId = ev.id;
+    eventYearInput.value = ev.year;
+    eventDescInput.value = ev.description || '';
+    eventEvidenceInput.value = ev.evidence || '';
+    eventSubmitBtn.textContent = 'Save changes';
+    eventCancelEditBtn.classList.add('show');
+    eventYearInput.focus();
+  }
+
+  function stopEditingEvent(){
+    editingEventId = null;
+    editEventForm.reset();
+    eventSubmitBtn.textContent = '+ Add event';
+    eventCancelEditBtn.classList.remove('show');
+  }
+
+  eventCancelEditBtn.addEventListener('click', stopEditingEvent);
 
   function relationDescription(link, personId){
     const otherId = link.source === personId ? link.target : link.source;
@@ -1874,15 +1919,28 @@ const eventsCol = collection(db, 'events');
         sub.textContent = ev.evidence;
         main.appendChild(sub);
       }
+      const editBtn = document.createElement('button');
+      editBtn.className = 'item-edit';
+      editBtn.textContent = '\u270e';
+      editBtn.title = 'Edit this event';
+      editBtn.addEventListener('click', () => startEditingEvent(ev));
+
       const removeBtn = document.createElement('button');
       removeBtn.className = 'item-remove';
       removeBtn.textContent = '\u2715';
       removeBtn.title = 'Remove this event';
       removeBtn.addEventListener('click', () => {
         deleteDoc(doc(eventsCol, ev.id)).catch(err => console.error('Failed to remove event', err));
+        if (editingEventId === ev.id) stopEditingEvent();
       });
+
+      const actions = document.createElement('div');
+      actions.className = 'item-actions';
+      actions.appendChild(editBtn);
+      actions.appendChild(removeBtn);
+
       row.appendChild(main);
-      row.appendChild(removeBtn);
+      row.appendChild(actions);
       editEventsList.appendChild(row);
     });
   }
@@ -1900,7 +1958,7 @@ const eventsCol = collection(db, 'events');
     editBirthplaceInput.value = person.birthPlace || '';
     editGenderInput.value = person.gender || 'u';
     editSaveConfirm.classList.remove('show');
-    editEventForm.reset();
+    stopEditingEvent(); // in case the modal was left mid-edit last time
 
     renderEditRelationsList();
     renderEditEventsList();
@@ -1952,21 +2010,30 @@ const eventsCol = collection(db, 'events');
   editEventForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!currentEditPersonId) return;
-    const year = document.getElementById('event-year').value;
-    const description = document.getElementById('event-desc').value.trim();
-    const evidence = document.getElementById('event-evidence').value.trim();
+    const year = eventYearInput.value;
+    const description = eventDescInput.value.trim();
+    const evidence = eventEvidenceInput.value.trim();
     if (!year || !description) return;
     try {
-      await setDoc(doc(eventsCol), {
-        personId: currentEditPersonId,
-        year: Number(year),
-        description,
-        evidence,
-        createdAt: Date.now()
-      });
-      editEventForm.reset();
+      if (editingEventId){
+        await updateDoc(doc(eventsCol, editingEventId), {
+          year: Number(year),
+          description,
+          evidence
+        });
+        stopEditingEvent();
+      } else {
+        await setDoc(doc(eventsCol), {
+          personId: currentEditPersonId,
+          year: Number(year),
+          description,
+          evidence,
+          createdAt: Date.now()
+        });
+        editEventForm.reset();
+      }
     } catch (err){
-      console.error('Failed to add event', err);
+      console.error('Failed to save event', err);
     }
   });
 

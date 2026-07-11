@@ -50,6 +50,27 @@
   .arrange-select:hover{ border-color:rgba(255,255,255,0.5); }
   .arrange-select:focus{ outline:none; border-color:var(--accent); }
 
+  .toolbar-btn{
+    background:transparent;
+    color:var(--panel-ink);
+    border:1px solid rgba(255,255,255,0.3);
+    border-radius:4px;
+    font-family:var(--font-ui);
+    font-size:12px;
+    padding:6px 10px;
+    cursor:pointer;
+  }
+  .toolbar-btn:hover{ border-color:rgba(255,255,255,0.6); }
+  .toolbar-btn.active{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+
+  .tracking-hint{
+    display:none;
+    font-size:11px;
+    color:#cfc4a8;
+    font-style:italic;
+  }
+  .tracking-hint.show{ display:inline; }
+
   .sync-status{
     display:flex; align-items:center; gap:6px;
     font-size:11px; color:#b8ad95;
@@ -96,6 +117,8 @@
   .thread-parent{ stroke:var(--thread-parent); }
   .thread-spouse{ stroke:var(--thread-spouse); stroke-width:2.6; }
   .thread-sibling{ stroke:var(--thread-sibling); stroke-dasharray:5,4; }
+  .thread-lineage{ stroke:#c9a227 !important; stroke-width:4 !important; opacity:1 !important; }
+  .thread-dim{ opacity:0.1 !important; }
 
   .link-tag{
     position:absolute;
@@ -126,6 +149,9 @@
     text-align:center;
   }
   .card.dragging{ cursor:grabbing; box-shadow:3px 8px 18px rgba(0,0,0,0.5); z-index:5; }
+  .card.lineage-root{ box-shadow:0 0 0 3px var(--accent), 3px 6px 14px rgba(0,0,0,0.4); z-index:6; }
+  .card.lineage-ancestor{ box-shadow:0 0 0 3px #c9a227, 3px 6px 14px rgba(0,0,0,0.4); z-index:5; }
+  .card.lineage-dim{ opacity:0.22; }
 
   .pin{
     position:absolute; top:-7px; left:50%; transform:translateX(-50%);
@@ -387,6 +413,8 @@
     <option value="clusters">Connection clusters</option>
     <option value="manual">Manual (reset to saved positions)</option>
   </select>
+  <button id="track-lineage-btn" type="button" class="toolbar-btn">Track lineage</button>
+  <span id="tracking-hint" class="tracking-hint">Click a person to trace their ancestors</span>
   <div class="count" id="person-count">0 people</div>
   <div class="sync-status" id="sync-status"><span class="sync-dot"></span><span id="sync-label">Connecting...</span></div>
 </div>
@@ -739,7 +767,7 @@ const eventsCol = collection(db, 'events');
       tag.textContent = sourceNode ? relationLabel(l.type, sourceNode) : '';
       worldEl.appendChild(tag);
 
-      linkEls.push({ el: path, tagEl: tag, sourceId: l.source, targetId: l.target });
+      linkEls.push({ el: path, tagEl: tag, sourceId: l.source, targetId: l.target, type: l.type });
     });
 
     // cards
@@ -789,6 +817,7 @@ const eventsCol = collection(db, 'events');
     ghostCard.style.display = nodes.length === 0 ? 'block' : 'none';
 
     updatePositions();
+    applyLineageHighlight(); // reapply if a lineage is currently being tracked
   }
 
   // ---------- Camera (pan + zoom) ----------
@@ -844,7 +873,8 @@ const eventsCol = collection(db, 'events');
           console.error('Failed to save position', err);
         });
       } else {
-        openTimelineModal(node.id);
+        if (trackingMode) setTrackedPerson(node.id);
+        else openTimelineModal(node.id);
       }
     });
   }
@@ -1143,6 +1173,77 @@ const eventsCol = collection(db, 'events');
     else if (kind) applyArrangement(kind);
   });
 
+  // ---------- Lineage tracking ----------
+  let trackingMode = false;
+  let trackedRootId = null;
+  let trackedAncestorIds = new Set();
+
+  // Walks parent links upward from personId, collecting every direct
+  // ancestor on both sides (maternal and paternal), however far back the
+  // tree goes. Does not include personId itself.
+  function computeAncestors(personId){
+    const ancestors = new Set();
+    const queue = [personId];
+    while (queue.length){
+      const cur = queue.shift();
+      links.forEach(l => {
+        if (l.type === 'parent' && l.target === cur && !ancestors.has(l.source)){
+          ancestors.add(l.source);
+          queue.push(l.source);
+        }
+      });
+    }
+    return ancestors;
+  }
+
+  // Applies (or clears) the highlight/dim styling on current card and link
+  // elements. Called after every renderAll() so it survives incidental
+  // re-renders (e.g. someone else adding a person) while a lineage is
+  // actively being tracked.
+  function applyLineageHighlight(){
+    Object.values(cardEls).forEach(el => {
+      el.classList.remove('lineage-root', 'lineage-ancestor', 'lineage-dim');
+    });
+    linkEls.forEach(l => { l.el.classList.remove('thread-lineage', 'thread-dim'); });
+
+    if (!trackingMode || !trackedRootId || !cardEls[trackedRootId]) return;
+
+    const inLineage = (id) => id === trackedRootId || trackedAncestorIds.has(id);
+
+    Object.keys(cardEls).forEach(id => {
+      const el = cardEls[id];
+      if (id === trackedRootId) el.classList.add('lineage-root');
+      else if (trackedAncestorIds.has(id)) el.classList.add('lineage-ancestor');
+      else el.classList.add('lineage-dim');
+    });
+
+    linkEls.forEach(l => {
+      const isLineageLink = l.type === 'parent' && inLineage(l.targetId) && trackedAncestorIds.has(l.sourceId);
+      l.el.classList.add(isLineageLink ? 'thread-lineage' : 'thread-dim');
+    });
+  }
+
+  function setTrackedPerson(personId){
+    trackedRootId = personId;
+    trackedAncestorIds = computeAncestors(personId);
+    applyLineageHighlight();
+  }
+
+  function clearTracking(){
+    trackedRootId = null;
+    trackedAncestorIds = new Set();
+    applyLineageHighlight();
+  }
+
+  const trackLineageBtn = document.getElementById('track-lineage-btn');
+  const trackingHint = document.getElementById('tracking-hint');
+  trackLineageBtn.addEventListener('click', () => {
+    trackingMode = !trackingMode;
+    trackLineageBtn.classList.toggle('active', trackingMode);
+    trackingHint.classList.toggle('show', trackingMode);
+    if (!trackingMode) clearTracking();
+  });
+
   // ---------- Moving the camera to a point ----------
   function centerOn(x, y){
     camX = canvasEl.clientWidth / 2 - x * camScale;
@@ -1359,7 +1460,10 @@ const eventsCol = collection(db, 'events');
         e.preventDefault();
         const tappedNode = pendingNode;
         clearPending();
-        if (tappedNode) openTimelineModal(tappedNode.id);
+        if (tappedNode){
+          if (trackingMode) setTrackedPerson(tappedNode.id);
+          else openTimelineModal(tappedNode.id);
+        }
         return;
       }
 

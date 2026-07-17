@@ -149,6 +149,7 @@
     text-align:center;
   }
   .card.dragging{ cursor:grabbing; box-shadow:3px 8px 18px rgba(0,0,0,0.5); z-index:5; }
+  body.read-only .card{ cursor:pointer; }
   .card.lineage-root{ box-shadow:0 0 0 3px var(--accent), 3px 6px 14px rgba(0,0,0,0.4); z-index:6; }
   .card.lineage-ancestor{ box-shadow:0 0 0 3px #c9a227, 3px 6px 14px rgba(0,0,0,0.4); z-index:5; }
   .card.lineage-dim{ opacity:0.22; }
@@ -396,6 +397,39 @@
   .btn-cancel-edit.show{ display:inline; }
   .btn-cancel-edit:hover{ color:var(--ink); }
 
+  .auth-status{
+    display:flex; align-items:center; gap:8px;
+    font-size:11px; color:#cfc4a8;
+  }
+  .auth-status.signed-in #auth-status-label{ color:#8fbf8f; font-weight:600; }
+
+  #auth-overlay{
+    position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(20,17,12,0.55);
+    display:none; align-items:center; justify-content:center;
+    z-index:22;
+  }
+  #auth-overlay.open{ display:flex; }
+  #auth-modal{
+    width:320px; background:var(--card-bg); border-radius:4px;
+    padding:22px 22px 18px; box-shadow:0 12px 30px rgba(0,0,0,0.5);
+    font-family:var(--font-ui); color:var(--ink);
+  }
+  #auth-modal h2{ font-family:var(--font-display); font-size:17px; margin:0 0 8px; }
+  .auth-modal-note{ font-size:12px; color:var(--ink-soft); line-height:1.5; margin:0 0 14px; }
+  #auth-modal label{
+    display:block; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;
+    color:var(--ink-soft); margin:10px 0 4px;
+  }
+  #auth-modal input{
+    width:100%; padding:7px 8px; font-family:var(--font-ui); font-size:13px;
+    border:1px solid rgba(0,0,0,0.3); border-radius:3px; background:#fffdf6;
+  }
+  .auth-error{
+    display:none; margin-top:10px; font-size:12px; color:var(--thread-spouse);
+  }
+  .auth-error.show{ display:block; }
+
   .edit-list{ display:flex; flex-direction:column; gap:6px; }
   .edit-list-empty{ font-size:12px; color:var(--ink-soft); font-style:italic; padding:2px 0; }
   .edit-list-item{
@@ -443,7 +477,29 @@
   <button id="track-relation-btn" type="button" class="toolbar-btn">Track relation</button>
   <span id="tracking-hint" class="tracking-hint">Click a person to trace their ancestors</span>
   <div class="count" id="person-count">0 people</div>
+  <div class="auth-status" id="auth-status">
+    <span id="auth-status-label">Viewing only</span>
+    <button id="auth-btn" type="button" class="toolbar-btn">Sign in to edit</button>
+  </div>
   <div class="sync-status" id="sync-status"><span class="sync-dot"></span><span id="sync-label">Connecting...</span></div>
+</div>
+
+<div id="auth-overlay">
+  <div id="auth-modal">
+    <h2>Sign in to edit</h2>
+    <p class="auth-modal-note">Viewing the tree never requires an account. Signing in is only needed to add, edit, or remove anything.</p>
+    <form id="auth-form">
+      <label for="auth-email">Email</label>
+      <input id="auth-email" type="email" required autocomplete="username">
+      <label for="auth-password">Password</label>
+      <input id="auth-password" type="password" required autocomplete="current-password">
+      <div class="auth-error" id="auth-error"></div>
+      <div class="actions">
+        <button type="button" class="btn-cancel" id="auth-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-submit">Sign in</button>
+      </div>
+    </form>
+  </div>
 </div>
 
 <div id="canvas">
@@ -602,7 +658,7 @@
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js';
 import {
-  getAuth, signInAnonymously, onAuthStateChanged
+  getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js';
 import {
   getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
@@ -831,11 +887,13 @@ const eventsCol = collection(db, 'events');
         card.appendChild(maidenEl);
       }
 
-      const addBtn = document.createElement('div');
-      addBtn.className = 'add-btn';
-      addBtn.textContent = '+';
-      addBtn.addEventListener('click', (e) => { e.stopPropagation(); openModal(n.id); });
-      card.appendChild(addBtn);
+      if (isEditor()){
+        const addBtn = document.createElement('div');
+        addBtn.className = 'add-btn';
+        addBtn.textContent = '+';
+        addBtn.addEventListener('click', (e) => { e.stopPropagation(); openModal(n.id); });
+        card.appendChild(addBtn);
+      }
 
       attachDrag(card, n);
 
@@ -878,7 +936,7 @@ const eventsCol = collection(db, 'events');
     });
 
     window.addEventListener('mousemove', (e) => {
-      if (!dragging) return;
+      if (!dragging || !isEditor()) return; // viewers can still click/tap cards, just not drag them
       const dx = e.clientX - startX, dy = e.clientY - startY;
       if (Math.hypot(dx, dy) > 4) moved = true; // small threshold = still a "click"
       // Mouse movement is in screen pixels; divide by the zoom level to get
@@ -1591,12 +1649,16 @@ const eventsCol = collection(db, 'events');
         e.preventDefault(); // avoid iOS text-selection/callout during the hold
         pendingCardEl = cardEl;
         pendingNode = node;
-        longPressTimer = setTimeout(() => {
-          longPressTimer = null;
-          cardDragActive = true;
-          dragStart = { x: touchStartX, y: touchStartY, nodeX: node.x, nodeY: node.y };
-          cardEl.classList.add('dragging');
-        }, LONG_PRESS_MS);
+        if (isEditor()){
+          longPressTimer = setTimeout(() => {
+            longPressTimer = null;
+            cardDragActive = true;
+            dragStart = { x: touchStartX, y: touchStartY, nodeX: node.x, nodeY: node.y };
+            cardEl.classList.add('dragging');
+          }, LONG_PRESS_MS);
+        }
+        // Non-editors never get the timer armed, so dragging can never
+        // start — any release just resolves as a tap (see touchend below).
       } else if (!target.closest('#ghost-card')){
         // Empty background — pan starts immediately, same as a mouse drag.
         panActive = true;
@@ -1671,8 +1733,11 @@ const eventsCol = collection(db, 'events');
         return;
       }
 
-      if (longPressTimer){
-        // Long-press never fired — this was a genuine tap.
+      if (pendingNode && !cardDragActive){
+        // Either the long-press hasn't fired yet (a genuine quick tap), or
+        // this viewer isn't an editor so the drag timer never got armed at
+        // all — either way, releasing here without ever entering drag mode
+        // means "open this person", same as a click.
         e.preventDefault();
         const tappedNode = pendingNode;
         clearPending();
@@ -1718,6 +1783,7 @@ const eventsCol = collection(db, 'events');
     const person = nodeById(personId);
     if (!person) return;
     currentTimelinePersonId = personId;
+    document.getElementById('timeline-edit-btn').style.display = isEditor() ? '' : 'none';
 
     timelineNameEl.textContent = person.maidenName ? `${person.name} (n\u00e9e ${person.maidenName})` : person.name;
     const dateRange = person.birth
@@ -1946,6 +2012,7 @@ const eventsCol = collection(db, 'events');
   }
 
   function openEditModal(personId){
+    if (!requireEditor()) return;
     const person = nodeById(personId);
     if (!person) return;
     currentEditPersonId = personId;
@@ -2118,6 +2185,7 @@ const eventsCol = collection(db, 'events');
   });
 
   function openModal(sourceId){
+    if (!requireEditor()) return;
     pendingSourceId = sourceId;
     if (sourceId === null){
       modalTitle.textContent = 'Add the first person';
@@ -2230,6 +2298,79 @@ const eventsCol = collection(db, 'events');
     }
   });
 
+  // ---------- Editor authentication ----------
+  // Viewing never requires an account (Firestore rules allow public read).
+  // Editing requires a real (non-anonymous) signed-in account whose email
+  // is on the allowlist enforced by the security rules — this client-side
+  // check only controls whether edit controls are shown; the rules are
+  // what actually enforce it.
+  function isEditor(){
+    return !!(auth.currentUser && !auth.currentUser.isAnonymous);
+  }
+
+  const authStatusEl = document.getElementById('auth-status');
+  const authStatusLabel = document.getElementById('auth-status-label');
+  const authBtn = document.getElementById('auth-btn');
+  const authOverlay = document.getElementById('auth-overlay');
+  const authForm = document.getElementById('auth-form');
+  const authError = document.getElementById('auth-error');
+
+  function openAuthModal(){
+    authError.classList.remove('show');
+    authForm.reset();
+    authOverlay.classList.add('open');
+    document.getElementById('auth-email').focus();
+  }
+  function closeAuthModal(){
+    authOverlay.classList.remove('open');
+  }
+
+  function updateAuthUI(){
+    if (isEditor()){
+      authStatusEl.classList.add('signed-in');
+      authStatusLabel.textContent = 'Editing as ' + auth.currentUser.email;
+      authBtn.textContent = 'Sign out';
+    } else {
+      authStatusEl.classList.remove('signed-in');
+      authStatusLabel.textContent = 'Viewing only';
+      authBtn.textContent = 'Sign in to edit';
+    }
+    document.body.classList.toggle('read-only', !isEditor());
+    renderAll(); // show/hide edit affordances (add buttons, pencil, etc.)
+  }
+
+  authBtn.addEventListener('click', () => {
+    if (isEditor()){
+      signOut(auth).then(() => signInAnonymously(auth)).catch(err => console.error('Sign-out failed', err));
+    } else {
+      openAuthModal();
+    }
+  });
+  document.getElementById('auth-cancel-btn').addEventListener('click', closeAuthModal);
+  authOverlay.addEventListener('click', (e) => { if (e.target === authOverlay) closeAuthModal(); });
+
+  authForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+    authError.classList.remove('show');
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      closeAuthModal();
+    } catch (err){
+      authError.textContent = 'Sign-in failed \u2014 check the email and password.';
+      authError.classList.add('show');
+    }
+  });
+
+  // A single place any write path can call if a permission check fails,
+  // so the reason is always clear rather than a silent no-op.
+  function requireEditor(){
+    if (isEditor()) return true;
+    openAuthModal();
+    return false;
+  }
+
   // ---------- Firestore sync ----------
   function setSyncStatus(state, label){
     syncStatusEl.className = 'sync-status ' + state;
@@ -2294,12 +2435,24 @@ const eventsCol = collection(db, 'events');
   renderAll(); // show ghost card immediately, don't wait on the network
 
   setSyncStatus('connecting', 'Connecting...');
-  onAuthStateChanged(auth, (user) => {
-    if (user) startSync();
+  let syncStarted = false;
+  onAuthStateChanged(auth, () => {
+    updateAuthUI();
+    if (!syncStarted){
+      syncStarted = true;
+      startSync();
+    }
   });
   signInAnonymously(auth).catch(err => {
     console.error('Anonymous sign-in failed', err);
-    setSyncStatus('error', 'Sign-in failed — see console');
+    // Reads are public, so viewing still works even if this fails —
+    // it just means this tab can't be used to sign in as an editor
+    // until the network issue clears.
+    setSyncStatus('error', 'Connection issue — viewing may still work');
+    if (!syncStarted){
+      syncStarted = true;
+      startSync();
+    }
   });
 
 })();

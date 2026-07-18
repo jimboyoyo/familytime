@@ -2568,6 +2568,20 @@ const personPlacesCol = collection(db, 'personPlaces');
       });
       applyLocalOverrides();
       renderAll();
+
+      // On the very first load, frame the camera around wherever the actual
+      // people are, rather than assuming they're near the world's center —
+      // that assumption breaks the moment the world's size (and therefore
+      // its center point) ever changes. Only do this once; later syncs
+      // (someone editing elsewhere) shouldn't yank the camera around while
+      // you're looking at something.
+      if (!initialFitDone && nodes.length > 0){
+        initialFitDone = true;
+        const posMap = {};
+        nodes.forEach(n => { posMap[n.id] = { x: n.x, y: n.y }; });
+        fitToPositions(posMap);
+      }
+
       setSyncStatus('synced', 'Synced');
     }, (err) => {
       console.error('People sync error', err);
@@ -2635,6 +2649,7 @@ const personPlacesCol = collection(db, 'personPlaces');
 
   setSyncStatus('connecting', 'Connecting...');
   let syncStarted = false;
+  let initialFitDone = false;
   onAuthStateChanged(auth, () => {
     updateAuthUI();
     if (!syncStarted){

@@ -561,8 +561,6 @@
           <input id="p-death" type="number" placeholder="blank if living">
         </div>
       </div>
-      <label for="p-birthplace">Place of birth</label>
-      <input id="p-birthplace" type="text" placeholder="e.g. Cork, Ireland">
       <label for="p-gender">Gender</label>
       <select id="p-gender">
         <option value="f">Female</option>
@@ -626,8 +624,6 @@
             <input id="edit-death" type="number" placeholder="blank if living">
           </div>
         </div>
-        <label for="edit-birthplace">Place of birth</label>
-        <input id="edit-birthplace" type="text" placeholder="e.g. Cork, Ireland">
         <label for="edit-gender">Gender</label>
         <select id="edit-gender">
           <option value="f">Female</option>
@@ -668,6 +664,28 @@
         </form>
       </section>
 
+      <section class="edit-section">
+        <h3>Places</h3>
+        <div id="edit-places-list" class="edit-list"></div>
+        <form id="edit-place-form">
+          <div class="modal-row">
+            <div style="flex:0 0 130px;">
+              <label for="place-type">Type</label>
+              <select id="place-type">
+                <option value="birth">Birthplace</option>
+                <option value="lived">Lived here</option>
+              </select>
+            </div>
+            <div style="position:relative;">
+              <label for="place-name">Place</label>
+              <input id="place-name" type="text" autocomplete="off" placeholder="e.g. Norra Hunna 1:8">
+              <div id="place-suggestions" class="suggestions"></div>
+            </div>
+          </div>
+          <button type="submit" class="btn-secondary">+ Add place</button>
+        </form>
+      </section>
+
     </div>
   </div>
 </div>
@@ -701,6 +719,8 @@ const db = getFirestore(fbApp);
 const peopleCol = collection(db, 'people');
 const linksCol = collection(db, 'links');
 const eventsCol = collection(db, 'events');
+const placesCol = collection(db, 'places');
+const personPlacesCol = collection(db, 'personPlaces');
 
 (function(){
 
@@ -712,6 +732,8 @@ const eventsCol = collection(db, 'events');
   let nodes = [];       // {id, name, birth, death, gender, rotation, x, y}
   let links = [];       // {source, target, type: 'parent' | 'spouse' | 'sibling'}
   let events = [];      // {id, personId, year, description, evidence, createdAt}
+  let places = [];      // {id, name} — expanded later with source links / GPS
+  let personPlaces = []; // {id, personId, placeId, type: 'birth' | 'lived'}
   let localPositionOverrides = {}; // id -> {x,y}; session-only, never written to Firestore
   let savedPositions = {}; // id -> {x,y}; last known real (Firestore) positions, pre-override
 
@@ -1815,7 +1837,23 @@ const eventsCol = collection(db, 'events');
     const dateRange = person.birth
       ? `${person.birth} \u2013 ${person.death || 'present'}`
       : 'Birth year unknown';
-    timelineDatesEl.textContent = person.birthPlace ? `${dateRange} \u00b7 Born in ${person.birthPlace}` : dateRange;
+
+    const personPlaceEntries = placesForPerson(personId);
+    const birthEntry = personPlaceEntries.find(pp => pp.type === 'birth');
+    const livedEntries = personPlaceEntries.filter(pp => pp.type === 'lived');
+
+    let placesLine = '';
+    if (birthEntry){
+      placesLine = `Born in ${birthEntry.place.name}`;
+    } else if (person.birthPlace){
+      placesLine = `Born in ${person.birthPlace}`; // legacy free-text fallback
+    }
+    if (livedEntries.length){
+      const livedNames = livedEntries.map(pp => pp.place.name).join(', ');
+      placesLine += (placesLine ? ' \u00b7 ' : '') + `Also lived: ${livedNames}`;
+    }
+
+    timelineDatesEl.textContent = placesLine ? `${dateRange} \u00b7 ${placesLine}` : dateRange;
 
     timelineTbody.innerHTML = '';
 
@@ -1910,7 +1948,6 @@ const eventsCol = collection(db, 'events');
   const editDeathInput = document.getElementById('edit-death');
   const editGenderInput = document.getElementById('edit-gender');
   const editMaidenInput = document.getElementById('edit-maiden');
-  const editBirthplaceInput = document.getElementById('edit-birthplace');
   const editSaveBasicBtn = document.getElementById('edit-save-basic');
   const editSaveConfirm = document.getElementById('edit-save-confirm');
   const editRelationsList = document.getElementById('edit-relations-list');
@@ -2037,6 +2074,121 @@ const eventsCol = collection(db, 'events');
     });
   }
 
+  // ---------- Places ----------
+  const editPlacesList = document.getElementById('edit-places-list');
+  const editPlaceForm = document.getElementById('edit-place-form');
+  const placeTypeSelect = document.getElementById('place-type');
+  const placeNameInput = document.getElementById('place-name');
+  const placeSuggestionsEl = document.getElementById('place-suggestions');
+
+  let selectedPlaceId = null; // set when the typed name matches an existing place
+
+  function placeById(id){ return places.find(p => p.id === id); }
+
+  function placesForPerson(personId){
+    return personPlaces
+      .filter(pp => pp.personId === personId)
+      .map(pp => ({ ...pp, place: placeById(pp.placeId) }))
+      .filter(pp => pp.place); // drop any orphaned refs
+  }
+
+  const PLACE_TYPE_LABELS = { birth: 'Birthplace', lived: 'Lived here' };
+
+  function updatePlaceSuggestions(){
+    const q = placeNameInput.value.trim().toLowerCase();
+    placeSuggestionsEl.innerHTML = '';
+    selectedPlaceId = null;
+    if (!q){ placeSuggestionsEl.classList.remove('open'); return; }
+    const matches = places.filter(p => p.name.toLowerCase().includes(q)).slice(0, 6);
+    if (!matches.length){ placeSuggestionsEl.classList.remove('open'); return; }
+    matches.forEach(p => {
+      const item = document.createElement('div');
+      item.className = 'suggestion-item';
+      item.textContent = p.name;
+      item.addEventListener('click', () => {
+        selectedPlaceId = p.id;
+        placeNameInput.value = p.name;
+        placeSuggestionsEl.classList.remove('open');
+        placeSuggestionsEl.innerHTML = '';
+      });
+      placeSuggestionsEl.appendChild(item);
+    });
+    placeSuggestionsEl.classList.add('open');
+  }
+  placeNameInput.addEventListener('input', updatePlaceSuggestions);
+  document.addEventListener('click', (e) => {
+    if (e.target !== placeNameInput && !e.target.closest('#place-suggestions')){
+      placeSuggestionsEl.classList.remove('open');
+    }
+  });
+
+  function renderEditPlacesList(){
+    if (!currentEditPersonId) return;
+    const personEntries = placesForPerson(currentEditPersonId);
+    editPlacesList.innerHTML = '';
+    if (!personEntries.length){
+      editPlacesList.innerHTML = '<div class="edit-list-empty">No places recorded yet.</div>';
+      return;
+    }
+    // Birthplace first, then "lived here" entries.
+    personEntries.sort((a, b) => (a.type === 'birth' ? -1 : 0) - (b.type === 'birth' ? -1 : 0));
+    personEntries.forEach(entry => {
+      const row = document.createElement('div');
+      row.className = 'edit-list-item';
+      const main = document.createElement('div');
+      main.className = 'item-main';
+      const typeSpan = document.createElement('span');
+      typeSpan.className = 'item-year';
+      typeSpan.textContent = PLACE_TYPE_LABELS[entry.type] || entry.type;
+      main.appendChild(typeSpan);
+      main.appendChild(document.createTextNode(entry.place.name));
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'item-remove';
+      removeBtn.textContent = '\u2715';
+      removeBtn.title = 'Remove this place';
+      removeBtn.addEventListener('click', () => {
+        deleteDoc(doc(personPlacesCol, entry.id)).catch(err => console.error('Failed to remove place', err));
+      });
+
+      row.appendChild(main);
+      row.appendChild(removeBtn);
+      editPlacesList.appendChild(row);
+    });
+  }
+
+  editPlaceForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!currentEditPersonId) return;
+    const name = placeNameInput.value.trim();
+    if (!name) return;
+    const type = placeTypeSelect.value;
+
+    try {
+      let placeId = selectedPlaceId;
+      if (!placeId){
+        const newPlaceRef = doc(placesCol);
+        placeId = newPlaceRef.id;
+        await setDoc(newPlaceRef, { name });
+      }
+
+      // A person can only have one birthplace — adding a new one replaces
+      // the old link rather than leaving two.
+      if (type === 'birth'){
+        const existingBirth = personPlaces.find(pp => pp.personId === currentEditPersonId && pp.type === 'birth');
+        if (existingBirth){
+          await deleteDoc(doc(personPlacesCol, existingBirth.id));
+        }
+      }
+
+      await setDoc(doc(personPlacesCol), { personId: currentEditPersonId, placeId, type });
+      editPlaceForm.reset();
+      selectedPlaceId = null;
+    } catch (err){
+      console.error('Failed to add place', err);
+    }
+  });
+
   function openEditModal(personId){
     if (!requireEditor()) return;
     const person = nodeById(personId);
@@ -2048,13 +2200,16 @@ const eventsCol = collection(db, 'events');
     editMaidenInput.value = person.maidenName || '';
     editBirthInput.value = person.birth || '';
     editDeathInput.value = person.death || '';
-    editBirthplaceInput.value = person.birthPlace || '';
     editGenderInput.value = person.gender || 'u';
     editSaveConfirm.classList.remove('show');
     stopEditingEvent(); // in case the modal was left mid-edit last time
+    editPlaceForm.reset();
+    selectedPlaceId = null;
+    placeSuggestionsEl.classList.remove('open');
 
     renderEditRelationsList();
     renderEditEventsList();
+    renderEditPlacesList();
 
     editOverlay.classList.add('open');
   }
@@ -2077,13 +2232,11 @@ const eventsCol = collection(db, 'events');
     const maidenName = editMaidenInput.value.trim();
     const birth = editBirthInput.value ? Number(editBirthInput.value) : null;
     const death = editDeathInput.value ? Number(editDeathInput.value) : null;
-    const birthPlace = editBirthplaceInput.value.trim();
     const gender = editGenderInput.value;
     try {
       await updateDoc(doc(peopleCol, currentEditPersonId), {
         name, birth, death, gender,
-        maidenName: maidenName || null,
-        birthPlace: birthPlace || null
+        maidenName: maidenName || null
       });
       editPersonNameLabel.textContent = name;
       editSaveConfirm.classList.add('show');
@@ -2138,7 +2291,6 @@ const eventsCol = collection(db, 'events');
   const deathInput = document.getElementById('p-death');
   const genderInput = document.getElementById('p-gender');
   const maidenInput = document.getElementById('p-maiden');
-  const birthplaceInput = document.getElementById('p-birthplace');
 
   let selectedExistingId = null; // set when the user picks a suggestion instead of typing a new person
 
@@ -2160,7 +2312,6 @@ const eventsCol = collection(db, 'events');
     deathInput.disabled = true;
     genderInput.disabled = true;
     maidenInput.disabled = true;
-    birthplaceInput.disabled = true;
   }
 
   function unlockExisting(){
@@ -2170,7 +2321,6 @@ const eventsCol = collection(db, 'events');
     deathInput.disabled = false;
     genderInput.disabled = false;
     maidenInput.disabled = false;
-    birthplaceInput.disabled = false;
   }
 
   function updateSuggestions(){
@@ -2260,7 +2410,6 @@ const eventsCol = collection(db, 'events');
         const death = deathInput.value;
         const gender = genderInput.value;
         const maidenName = maidenInput.value.trim();
-        const birthPlace = birthplaceInput.value.trim();
 
         let x, y;
         if (src){
@@ -2282,7 +2431,6 @@ const eventsCol = collection(db, 'events');
           death: death ? Number(death) : null,
           gender,
           maidenName: maidenName || null,
-          birthPlace: birthPlace || null,
           rotation: (Math.random() * 6 - 3),
           x, y
         });
@@ -2446,6 +2594,30 @@ const eventsCol = collection(db, 'events');
       setSyncStatus('synced', 'Synced');
     }, (err) => {
       console.error('Events sync error', err);
+      setSyncStatus('error', 'Sync error — check Firestore rules');
+    });
+
+    onSnapshot(placesCol, (snap) => {
+      places = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (editOverlay.classList.contains('open')) renderEditPlacesList();
+      if (timelineOverlay.classList.contains('open') && currentTimelinePersonId){
+        openTimelineModal(currentTimelinePersonId);
+      }
+      setSyncStatus('synced', 'Synced');
+    }, (err) => {
+      console.error('Places sync error', err);
+      setSyncStatus('error', 'Sync error — check Firestore rules');
+    });
+
+    onSnapshot(personPlacesCol, (snap) => {
+      personPlaces = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (editOverlay.classList.contains('open')) renderEditPlacesList();
+      if (timelineOverlay.classList.contains('open') && currentTimelinePersonId){
+        openTimelineModal(currentTimelinePersonId);
+      }
+      setSyncStatus('synced', 'Synced');
+    }, (err) => {
+      console.error('Person-places sync error', err);
       setSyncStatus('error', 'Sync error — check Firestore rules');
     });
   }

@@ -176,6 +176,23 @@
   }
   .add-btn:hover{ background:var(--accent-dark); }
 
+  .event-badge{
+    position:absolute; bottom:-10px; left:-10px;
+    min-width:20px; height:20px; padding:0 5px;
+    border-radius:10px;
+    background:var(--accent); color:#fff;
+    font-family:var(--font-body); font-size:11px; font-weight:700;
+    display:flex; align-items:center; justify-content:center;
+    box-shadow:0 2px 4px rgba(0,0,0,0.35);
+    border:2px solid var(--card-bg);
+    pointer-events:none;
+  }
+  .event-badge.event-badge-empty{
+    background:transparent; color:var(--ink-soft);
+    border-color:rgba(0,0,0,0.3);
+    box-shadow:none; opacity:0.55;
+  }
+
   #ghost-card{
     position:absolute;
     width:170px; padding:22px 14px; text-align:center;
@@ -886,6 +903,15 @@ const eventsCol = collection(db, 'events');
         maidenEl.textContent = `n\u00e9e ${n.maidenName}`;
         card.appendChild(maidenEl);
       }
+
+      const eventCount = events.filter(e => e.personId === n.id).length;
+      const eventBadge = document.createElement('div');
+      eventBadge.className = 'event-badge' + (eventCount === 0 ? ' event-badge-empty' : '');
+      eventBadge.textContent = eventCount;
+      eventBadge.title = eventCount === 0
+        ? 'No life events recorded yet'
+        : (eventCount === 1 ? '1 life event recorded' : `${eventCount} life events recorded`);
+      card.appendChild(eventBadge);
 
       if (isEditor()){
         const addBtn = document.createElement('div');
@@ -2412,6 +2438,7 @@ const eventsCol = collection(db, 'events');
 
     onSnapshot(eventsCol, (snap) => {
       events = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderAll(); // event-count badges on cards depend on this data too
       if (editOverlay.classList.contains('open')) renderEditEventsList();
       if (timelineOverlay.classList.contains('open') && currentTimelinePersonId){
         openTimelineModal(currentTimelinePersonId);

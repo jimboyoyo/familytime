@@ -489,6 +489,7 @@
     <option value="chronological">Chronological (birth year)</option>
     <option value="clusters">Connection clusters</option>
     <option value="manual">Manual (reset to saved positions)</option>
+    <option value="center">Center everything in the space</option>
   </select>
   <button id="track-lineage-btn" type="button" class="toolbar-btn">Track lineage</button>
   <button id="track-relation-btn" type="button" class="toolbar-btn">Track relation</button>
@@ -696,7 +697,7 @@ import {
   getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js';
 import {
-  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js';
 
 // Your web app's Firebase configuration.
@@ -760,6 +761,54 @@ const personPlacesCol = collection(db, 'personPlaces');
     nodes.forEach(n => { posMap[n.id] = { x: n.x, y: n.y }; });
     fitToPositions(posMap);
     setSyncStatus('synced', 'Synced');
+  }
+
+  // Shifts EVERYONE's real, saved position by the same fixed amount so the
+  // whole tree's bounding-box center lands on the world's center — relative
+  // positions (how things are arranged next to each other) don't change at
+  // all, only where the whole cluster sits in the much bigger space. Unlike
+  // the other Arrange options, this is a real, permanent write (not
+  // local-only), since it's fixing the actual underlying data, not just
+  // offering a different view of it.
+  async function centerEverything(){
+    if (!requireEditor()) return;
+    const ids = Object.keys(savedPositions);
+    if (!ids.length) return;
+
+    const xs = ids.map(id => savedPositions[id].x);
+    const ys = ids.map(id => savedPositions[id].y);
+    const curCenterX = (Math.min(...xs) + Math.max(...xs)) / 2;
+    const curCenterY = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const dx = CENTER_X - curCenterX;
+    const dy = CENTER_Y - curCenterY;
+
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1){
+      setSyncStatus('synced', 'Already centered');
+      return;
+    }
+
+    setSyncStatus('connecting', 'Centering...');
+    await new Promise(r => setTimeout(r, 20));
+
+    try {
+      const batch = writeBatch(db);
+      const newPosMap = {};
+      ids.forEach(id => {
+        const newX = clamp(savedPositions[id].x + dx, CARD_W, WORLD_W - CARD_W);
+        const newY = clamp(savedPositions[id].y + dy, CARD_H, WORLD_H - CARD_H);
+        newPosMap[id] = { x: newX, y: newY };
+        batch.update(doc(peopleCol, id), { x: newX, y: newY });
+      });
+      await batch.commit();
+      // This is a real data fix, not a temporary view — any active local-only
+      // arrangement is now based on stale (uncentered) coordinates, so clear it.
+      localPositionOverrides = {};
+      fitToPositions(newPosMap);
+      setSyncStatus('synced', 'Synced');
+    } catch (err){
+      console.error('Failed to center everything', err);
+      setSyncStatus('error', 'Centering failed \u2014 check connection');
+    }
   }
 
   const genderColor = { f:'#a2456b', m:'#3a5b8b', o:'#7a5ba8', u:'#8a8478' };
@@ -1307,6 +1356,7 @@ const personPlacesCol = collection(db, 'personPlaces');
     const kind = e.target.value;
     e.target.value = ''; // reset — this is a one-shot action, not a persistent mode
     if (kind === 'manual') resetToSavedPositions();
+    else if (kind === 'center') centerEverything();
     else if (kind) applyArrangement(kind);
   });
 

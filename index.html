@@ -115,7 +115,7 @@
   }
   .thread{ fill:none; stroke-width:2.2; opacity:0.85; }
   .thread-parent{ stroke:var(--thread-parent); }
-  .thread-spouse{ stroke:var(--thread-spouse); stroke-width:4; }
+  .thread-spouse{ stroke:var(--thread-spouse); stroke-width:2.6; }
   .thread-sibling{ stroke:var(--thread-sibling); stroke-dasharray:5,4; }
   .thread-lineage{ stroke:#c9a227 !important; stroke-width:4 !important; opacity:1 !important; }
   .thread-dim{ opacity:0.1 !important; }
@@ -1426,15 +1426,17 @@ const personPlacesCol = collection(db, 'personPlaces');
   let relationEndpointIds = null; // just the two chosen people
   let relationPathLinkIds = null; // exact link ids used, so the right edges light up
 
-  // Shortest path between two people through ANY relationship type (parent,
-  // spouse, sibling) — this is what reveals things like "these two are
-  // cousins" (path goes up through parents to a shared ancestor, then back
-  // down) or "these two are connected by marriage".
+  // Shortest path between two people through blood relationships only
+  // (parent and sibling links) — this is what reveals things like "these
+  // two are cousins" or "these two are siblings". Spouse links are
+  // deliberately excluded: being married into a family isn't the kind of
+  // connection this is meant to surface.
   function findRelationPath(idA, idB){
     if (idA === idB) return null;
     const adj = {};
     nodes.forEach(n => { adj[n.id] = []; });
     links.forEach(l => {
+      if (l.type === 'spouse') return; // marriage isn't a blood relationship
       if (adj[l.source]) adj[l.source].push({ neighborId: l.target, linkId: l.id });
       if (adj[l.target]) adj[l.target].push({ neighborId: l.source, linkId: l.id });
     });
@@ -1495,13 +1497,13 @@ const personPlacesCol = collection(db, 'personPlaces');
     const edges = linkIds.map((linkId, i) => {
       const link = links.find(l => l.id === linkId);
       if (!link) return null;
-      if (link.type !== 'parent') return { type: link.type };
+      if (link.type !== 'parent') return { type: link.type }; // a bare 'sibling' link (no shared parent recorded)
       const from = nodeIds[i];
       return { type: 'parent', direction: link.source === from ? 'down' : 'up' };
     });
 
     if (edges.some(e => !e || e.type !== 'parent')){
-      return edges.some(e => e && e.type === 'spouse') ? 'Related by marriage' : 'Related';
+      return 'Related'; // path runs through a bare sibling link, can't compute a precise degree
     }
 
     let i = 0, upSteps = 0;
@@ -1544,7 +1546,7 @@ const personPlacesCol = collection(db, 'personPlaces');
       relationPathIds = new Set([firstId, personId]);
       relationEndpointIds = new Set([firstId, personId]);
       relationPathLinkIds = new Set();
-      trackingHint.textContent = `No connection found between ${nameA} and ${nameB}`;
+      trackingHint.textContent = `No blood relationship found between ${nameA} and ${nameB}`;
     } else {
       relationPathIds = new Set(result.nodeIds);
       relationEndpointIds = new Set([firstId, personId]);

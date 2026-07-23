@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Places - Family Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Courier+Prime:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root{
+    --board-bg-1:#c8b184;
+    --card-bg:#f6efd9;
+    --card-bg-edge:#e9dfc0;
+    --ink:#2c2620;
+    --ink-soft:#6b6255;
+    --accent:#8a6a34;
+    --accent-dark:#6e5427;
+    --panel-bg:#26221c;
+    --panel-ink:#e8dfc9;
+    --thread-spouse:#a23636;
+    --font-display:'Special Elite', cursive;
+    --font-body:'Courier Prime', monospace;
+    --font-ui:'Inter', sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;font-family:var(--font-ui);}
+
+  #toolbar{
+    position:fixed; top:0; left:0; right:0; height:56px;
+    background:var(--panel-bg); color:var(--panel-ink);
+    display:flex; align-items:center; padding:0 20px; gap:16px;
+    z-index:10; box-shadow:0 2px 8px rgba(0,0,0,0.3);
+  }
+  .title{ font-family:var(--font-display); font-size:19px; letter-spacing:1px; }
+  .toolbar-btn{
+    background:transparent; color:var(--panel-ink);
+    border:1px solid rgba(255,255,255,0.3); border-radius:4px;
+    font-family:var(--font-ui); font-size:12px; padding:6px 10px; cursor:pointer;
+    text-decoration:none; display:inline-block;
+  }
+  .toolbar-btn:hover{ border-color:rgba(255,255,255,0.6); }
+
+  .place-select{
+    background:var(--panel-bg); color:var(--panel-ink);
+    border:1px solid rgba(255,255,255,0.25); border-radius:4px;
+    font-family:var(--font-ui); font-size:12px; padding:5px 8px; cursor:pointer;
+    min-width:220px;
+  }
+
+  .auth-status{ display:flex; align-items:center; gap:8px; font-size:11px; color:#cfc4a8; margin-left:auto; }
+  .auth-status.signed-in #auth-status-label{ color:#8fbf8f; font-weight:600; }
+
+  #map{
+    position:fixed; top:56px; left:0; right:0; bottom:0;
+    background:var(--board-bg-1);
+  }
+
+  #coord-panel{
+    position:fixed; top:76px; right:20px; width:300px;
+    background:var(--card-bg); border-radius:4px;
+    box-shadow:0 8px 24px rgba(0,0,0,0.35);
+    padding:16px 18px; font-family:var(--font-ui); color:var(--ink);
+    display:none; max-height:calc(100vh - 100px); overflow-y:auto;
+    z-index:5;
+  }
+  #coord-panel.open{ display:block; }
+  #coord-panel h2{ font-family:var(--font-display); font-size:16px; margin:0 0 8px; }
+  #coord-panel h3{ font-family:var(--font-display); font-size:13px; margin:16px 0 8px; border-top:1px solid rgba(0,0,0,0.12); padding-top:12px; }
+  .coord-hint{ font-size:11px; color:var(--ink-soft); line-height:1.5; margin:0 0 10px; }
+  #coord-panel label{
+    display:block; font-size:10px; text-transform:uppercase; letter-spacing:0.5px;
+    color:var(--ink-soft); margin:8px 0 4px;
+  }
+  #coord-panel input{
+    width:100%; padding:6px 8px; font-family:var(--font-ui); font-size:13px;
+    border:1px solid rgba(0,0,0,0.3); border-radius:3px; background:#fffdf6;
+  }
+  .coord-row{ display:flex; gap:8px; }
+  .coord-row > div{ flex:1; }
+  .btn-secondary{
+    font-family:var(--font-ui); font-size:12px; font-weight:600;
+    padding:7px 12px; border-radius:3px; border:1px solid var(--accent);
+    background:transparent; color:var(--accent-dark); cursor:pointer; margin-top:10px;
+  }
+  .btn-secondary:hover{ background:rgba(138,106,52,0.1); }
+
+  .edit-list{ display:flex; flex-direction:column; gap:6px; margin-bottom:4px; }
+  .edit-list-empty{ font-size:12px; color:var(--ink-soft); font-style:italic; }
+  .edit-list-item{
+    display:flex; align-items:flex-start; justify-content:space-between; gap:8px;
+    background:#fffdf6; border:1px solid rgba(0,0,0,0.15); border-radius:3px;
+    padding:6px 9px; font-size:12px;
+  }
+  .edit-list-item a{ color:var(--accent-dark); word-break:break-all; }
+  .item-remove{
+    background:none; border:none; color:var(--thread-spouse);
+    font-size:14px; line-height:1; cursor:pointer; padding:0 2px; flex-shrink:0;
+  }
+  .item-remove:hover{ color:#7a1f1f; }
+
+  #no-place-note{
+    position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    background:rgba(38,34,28,0.85); color:var(--panel-ink);
+    padding:16px 22px; border-radius:6px; font-size:13px; text-align:center;
+    z-index:4; pointer-events:none;
+  }
+
+  /* Popup content (rendered inside Leaflet's popup) */
+  .place-popup{ font-family:var(--font-ui); color:var(--ink); min-width:180px; }
+  .place-popup h3{ font-family:var(--font-display); font-size:15px; margin:0 0 8px; }
+  .popup-empty{ font-size:12px; color:var(--ink-soft); font-style:italic; }
+  .popup-people-list{ display:flex; flex-direction:column; gap:4px; margin-bottom:6px; }
+  .popup-person-row{ display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-size:12px; }
+  .popup-person-row a{ color:var(--accent-dark); font-weight:600; text-decoration:none; }
+  .popup-person-row a:hover{ text-decoration:underline; }
+  .popup-person-type{ font-size:10px; color:var(--ink-soft); white-space:nowrap; }
+  .popup-source-title{ font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--ink-soft); margin:8px 0 4px; }
+  .popup-source-link{ display:block; font-size:12px; color:var(--accent-dark); word-break:break-all; }
+
+  #auth-overlay{
+    position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(20,17,12,0.55);
+    display:none; align-items:center; justify-content:center; z-index:22;
+  }
+  #auth-overlay.open{ display:flex; }
+  #auth-modal{
+    width:320px; background:var(--card-bg); border-radius:4px;
+    padding:22px 22px 18px; box-shadow:0 12px 30px rgba(0,0,0,0.5);
+    font-family:var(--font-ui); color:var(--ink);
+  }
+  #auth-modal h2{ font-family:var(--font-display); font-size:17px; margin:0 0 8px; }
+  .auth-modal-note{ font-size:12px; color:var(--ink-soft); line-height:1.5; margin:0 0 14px; }
+  #auth-modal label{
+    display:block; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;
+    color:var(--ink-soft); margin:10px 0 4px;
+  }
+  #auth-modal input{
+    width:100%; padding:7px 8px; font-family:var(--font-ui); font-size:13px;
+    border:1px solid rgba(0,0,0,0.3); border-radius:3px; background:#fffdf6;
+  }
+  .auth-error{ display:none; margin-top:10px; font-size:12px; color:var(--thread-spouse); }
+  .auth-error.show{ display:block; }
+  .actions{ display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
+  .btn-cancel{ background:transparent; color:var(--ink-soft); border:none; font-family:var(--font-ui); font-size:13px; padding:8px 16px; cursor:pointer; }
+  .btn-submit{ background:var(--accent); color:#fff; font-weight:600; border:none; font-family:var(--font-ui); font-size:13px; padding:8px 16px; border-radius:3px; cursor:pointer; }
+  .btn-submit:hover{ background:var(--accent-dark); }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div class="title">FAMILY BOARD</div>
+  <a href="index.html" class="toolbar-btn">&#8592; Back to board</a>
+  <select id="place-select" class="place-select">
+    <option value="">Select a place...</option>
+  </select>
+  <div class="auth-status" id="auth-status">
+    <span id="auth-status-label">Viewing only</span>
+    <button id="auth-btn" type="button" class="toolbar-btn">Sign in to edit</button>
+  </div>
+</div>
+
+<div id="map"></div>
+<div id="no-place-note">Select a place above to see it on the map.</div>
+
+<div id="coord-panel">
+  <h2 id="coord-panel-title">Place name</h2>
+  <p class="coord-hint">Click anywhere on the map to set this place's location, or enter coordinates directly (e.g. copied from Lantm&auml;teriet).</p>
+  <div class="coord-row">
+    <div>
+      <label for="coord-lat">Latitude</label>
+      <input id="coord-lat" type="number" step="any" placeholder="59.3293">
+    </div>
+    <div>
+      <label for="coord-lng">Longitude</label>
+      <input id="coord-lng" type="number" step="any" placeholder="18.0686">
+    </div>
+  </div>
+  <button id="save-coords-btn" type="button" class="btn-secondary">Save location</button>
+
+  <h3>Source links</h3>
+  <div id="source-links-list" class="edit-list"></div>
+  <form id="source-link-form">
+    <label for="source-label">Label</label>
+    <input id="source-label" type="text" placeholder="e.g. Lantm&auml;teriet map">
+    <label for="source-url">URL</label>
+    <input id="source-url" type="text" placeholder="https://...">
+    <button type="submit" class="btn-secondary">+ Add source link</button>
+  </form>
+</div>
+
+<div id="auth-overlay">
+  <div id="auth-modal">
+    <h2>Sign in to edit</h2>
+    <p class="auth-modal-note">Viewing places never requires an account. Signing in is only needed to set a place's location or add source links.</p>
+    <form id="auth-form">
+      <label for="auth-email">Email</label>
+      <input id="auth-email" type="email" required autocomplete="username">
+      <label for="auth-password">Password</label>
+      <input id="auth-password" type="password" required autocomplete="current-password">
+      <div class="auth-error" id="auth-error"></div>
+      <div class="actions">
+        <button type="button" class="btn-cancel" id="auth-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-submit">Sign in</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js';
+import {
+  getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut
+} from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js';
+import {
+  getFirestore, collection, doc, updateDoc, onSnapshot
+} from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js';
+
+// Same project as the family board — Firebase API keys are meant to be
+// public; security is enforced by Firestore rules, not by hiding this.
+const firebaseConfig = {
+  apiKey: "AIzaSyC_v8DTz9QKMivyd7aW0aioHzlI8GMCa5g",
+  authDomain: "familytime-a6854.firebaseapp.com",
+  databaseURL: "https://familytime-a6854-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "familytime-a6854",
+  storageBucket: "familytime-a6854.firebasestorage.app",
+  messagingSenderId: "713977255018",
+  appId: "1:713977255018:web:2e88ea6f6ac6a78f896613"
+};
+
+const fbApp = initializeApp(firebaseConfig);
+const auth = getAuth(fbApp);
+const db = getFirestore(fbApp);
+const placesCol = collection(db, 'places');
+const personPlacesCol = collection(db, 'personPlaces');
+const peopleCol = collection(db, 'people');
+
+(function(){
+
+  let places = [];
+  let personPlaces = [];
+  let people = [];
+  let selectedPlaceId = null;
+  let marker = null;
+  let previewMarker = null;
+
+  function isEditor(){
+    return !!(auth.currentUser && !auth.currentUser.isAnonymous);
+  }
+
+  // ---------- Map ----------
+  const map = L.map('map').setView([59.3293, 18.0686], 5); // default: roughly Sweden
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+
+  map.on('click', (e) => {
+    if (!isEditor() || !selectedPlaceId) return;
+    coordLatInput.value = e.latlng.lat.toFixed(6);
+    coordLngInput.value = e.latlng.lng.toFixed(6);
+    if (previewMarker) map.removeLayer(previewMarker);
+    previewMarker = L.marker([e.latlng.lat, e.latlng.lng], { opacity: 0.6 }).addTo(map);
+  });
+
+  // ---------- DOM refs ----------
+  const placeSelect = document.getElementById('place-select');
+  const noPlaceNote = document.getElementById('no-place-note');
+  const coordPanel = document.getElementById('coord-panel');
+  const coordPanelTitle = document.getElementById('coord-panel-title');
+  const coordLatInput = document.getElementById('coord-lat');
+  const coordLngInput = document.getElementById('coord-lng');
+  const saveCoordsBtn = document.getElementById('save-coords-btn');
+  const sourceLinksList = document.getElementById('source-links-list');
+  const sourceLinkForm = document.getElementById('source-link-form');
+  const sourceLabelInput = document.getElementById('source-label');
+  const sourceUrlInput = document.getElementById('source-url');
+
+  function placeById(id){ return places.find(p => p.id === id); }
+  function personById(id){ return people.find(p => p.id === id); }
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ---------- Dropdown ----------
+  function renderPlaceDropdown(){
+    const currentVal = placeSelect.value;
+    placeSelect.innerHTML = '<option value="">Select a place...</option>';
+    places.slice().sort((a, b) => a.name.localeCompare(b.name)).forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name;
+      placeSelect.appendChild(opt);
+    });
+    if (currentVal && placeById(currentVal)) placeSelect.value = currentVal;
+  }
+  placeSelect.addEventListener('change', () => {
+    if (placeSelect.value) showPlace(placeSelect.value);
+  });
+
+  // ---------- Showing a place ----------
+  function showPlace(placeId){
+    selectedPlaceId = placeId;
+    const place = placeById(placeId);
+    if (!place) return;
+
+    if (marker){ map.removeLayer(marker); marker = null; }
+    if (previewMarker){ map.removeLayer(previewMarker); previewMarker = null; }
+
+    if (place.lat != null && place.lng != null){
+      noPlaceNote.style.display = 'none';
+      map.setView([place.lat, place.lng], 14);
+      marker = L.marker([place.lat, place.lng]).addTo(map);
+      marker.bindPopup(buildPopupContent(place));
+    } else {
+      noPlaceNote.style.display = isEditor() ? 'none' : 'block';
+      noPlaceNote.textContent = "This place doesn't have a location recorded yet.";
+    }
+
+    renderCoordPanel();
+  }
+
+  function buildPopupContent(place){
+    const container = document.createElement('div');
+    container.className = 'place-popup';
+
+    const title = document.createElement('h3');
+    title.textContent = place.name;
+    container.appendChild(title);
+
+    const entries = personPlaces.filter(pp => pp.placeId === place.id);
+    if (!entries.length){
+      const p = document.createElement('div');
+      p.className = 'popup-empty';
+      p.textContent = 'No one recorded at this place yet.';
+      container.appendChild(p);
+    } else {
+      const list = document.createElement('div');
+      list.className = 'popup-people-list';
+      entries.forEach(pp => {
+        const person = personById(pp.personId);
+        if (!person) return;
+        const row = document.createElement('div');
+        row.className = 'popup-person-row';
+        const link = document.createElement('a');
+        link.href = 'index.html?openPerson=' + encodeURIComponent(person.id);
+        link.textContent = person.name;
+        const typeLabel = document.createElement('span');
+        typeLabel.className = 'popup-person-type';
+        typeLabel.textContent = pp.type === 'birth' ? 'Born here' : 'Lived here';
+        row.appendChild(link);
+        row.appendChild(typeLabel);
+        list.appendChild(row);
+      });
+      container.appendChild(list);
+    }
+
+    if (place.sourceLinks && place.sourceLinks.length){
+      const srcTitle = document.createElement('div');
+      srcTitle.className = 'popup-source-title';
+      srcTitle.textContent = 'Sources';
+      container.appendChild(srcTitle);
+      place.sourceLinks.forEach(sl => {
+        const a = document.createElement('a');
+        a.href = sl.url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        a.className = 'popup-source-link';
+        a.textContent = sl.label || sl.url;
+        container.appendChild(a);
+      });
+    }
+
+    return container;
+  }
+
+  // ---------- Editor panel (coordinates + source links) ----------
+  function renderCoordPanel(){
+    const place = placeById(selectedPlaceId);
+    if (!place || !isEditor()){
+      coordPanel.classList.remove('open');
+      return;
+    }
+    coordPanel.classList.add('open');
+    coordPanelTitle.textContent = place.name;
+    coordLatInput.value = place.lat != null ? place.lat : '';
+    coordLngInput.value = place.lng != null ? place.lng : '';
+    renderSourceLinksList(place);
+  }
+
+  function renderSourceLinksList(place){
+    sourceLinksList.innerHTML = '';
+    const links = place.sourceLinks || [];
+    if (!links.length){
+      sourceLinksList.innerHTML = '<div class="edit-list-empty">No source links yet.</div>';
+      return;
+    }
+    links.forEach((sl, index) => {
+      const row = document.createElement('div');
+      row.className = 'edit-list-item';
+      const a = document.createElement('a');
+      a.href = sl.url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = sl.label || sl.url;
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'item-remove';
+      removeBtn.textContent = '\u2715';
+      removeBtn.title = 'Remove this source link';
+      removeBtn.addEventListener('click', () => removeSourceLink(index));
+      row.appendChild(a);
+      row.appendChild(removeBtn);
+      sourceLinksList.appendChild(row);
+    });
+  }
+
+  async function removeSourceLink(index){
+    const place = placeById(selectedPlaceId);
+    if (!place) return;
+    const newLinks = (place.sourceLinks || []).slice();
+    newLinks.splice(index, 1);
+    try {
+      await updateDoc(doc(placesCol, selectedPlaceId), { sourceLinks: newLinks });
+    } catch (err){
+      console.error('Failed to remove source link', err);
+    }
+  }
+
+  saveCoordsBtn.addEventListener('click', async () => {
+    if (!isEditor() || !selectedPlaceId) return;
+    const lat = parseFloat(coordLatInput.value);
+    const lng = parseFloat(coordLngInput.value);
+    if (isNaN(lat) || isNaN(lng)) return;
+    try {
+      await updateDoc(doc(placesCol, selectedPlaceId), { lat, lng });
+      if (previewMarker){ map.removeLayer(previewMarker); previewMarker = null; }
+    } catch (err){
+      console.error('Failed to save location', err);
+    }
+  });
+
+  sourceLinkForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!isEditor() || !selectedPlaceId) return;
+    const label = sourceLabelInput.value.trim();
+    const url = sourceUrlInput.value.trim();
+    if (!url) return;
+    const place = placeById(selectedPlaceId);
+    const newLinks = (place.sourceLinks || []).concat([{ label, url }]);
+    try {
+      await updateDoc(doc(placesCol, selectedPlaceId), { sourceLinks: newLinks });
+      sourceLinkForm.reset();
+    } catch (err){
+      console.error('Failed to add source link', err);
+    }
+  });
+
+  // ---------- Auth ----------
+  const authStatusEl = document.getElementById('auth-status');
+  const authStatusLabel = document.getElementById('auth-status-label');
+  const authBtn = document.getElementById('auth-btn');
+  const authOverlay = document.getElementById('auth-overlay');
+  const authForm = document.getElementById('auth-form');
+  const authError = document.getElementById('auth-error');
+
+  function openAuthModal(){
+    authError.classList.remove('show');
+    authForm.reset();
+    authOverlay.classList.add('open');
+    document.getElementById('auth-email').focus();
+  }
+  function closeAuthModal(){ authOverlay.classList.remove('open'); }
+
+  function updateAuthUI(){
+    if (isEditor()){
+      authStatusEl.classList.add('signed-in');
+      authStatusLabel.textContent = 'Editing as ' + auth.currentUser.email;
+      authBtn.textContent = 'Sign out';
+    } else {
+      authStatusEl.classList.remove('signed-in');
+      authStatusLabel.textContent = 'Viewing only';
+      authBtn.textContent = 'Sign in to edit';
+    }
+    if (selectedPlaceId) showPlace(selectedPlaceId);
+  }
+
+  authBtn.addEventListener('click', () => {
+    if (isEditor()){
+      signOut(auth).then(() => signInAnonymously(auth)).catch(err => console.error('Sign-out failed', err));
+    } else {
+      openAuthModal();
+    }
+  });
+  document.getElementById('auth-cancel-btn').addEventListener('click', closeAuthModal);
+  authOverlay.addEventListener('click', (e) => { if (e.target === authOverlay) closeAuthModal(); });
+
+  authForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+    authError.classList.remove('show');
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      closeAuthModal();
+    } catch (err){
+      authError.textContent = 'Sign-in failed \u2014 check the email and password.';
+      authError.classList.add('show');
+    }
+  });
+
+  // ---------- Sync ----------
+  function startSync(){
+    onSnapshot(placesCol, (snap) => {
+      places = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      renderPlaceDropdown();
+      if (selectedPlaceId) showPlace(selectedPlaceId);
+    }, (err) => console.error('Places sync error', err));
+
+    onSnapshot(personPlacesCol, (snap) => {
+      personPlaces = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (selectedPlaceId) showPlace(selectedPlaceId);
+    }, (err) => console.error('Person-places sync error', err));
+
+    onSnapshot(peopleCol, (snap) => {
+      people = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (selectedPlaceId) showPlace(selectedPlaceId);
+    }, (err) => console.error('People sync error', err));
+  }
+
+  // ---------- Init ----------
+  let syncStarted = false;
+  onAuthStateChanged(auth, () => {
+    updateAuthUI();
+    if (!syncStarted){
+      syncStarted = true;
+      startSync();
+    }
+  });
+  signInAnonymously(auth).catch(err => {
+    console.error('Anonymous sign-in failed', err);
+    if (!syncStarted){
+      syncStarted = true;
+      startSync();
+    }
+  });
+
+})();
+</script>
+</body>
+</html>

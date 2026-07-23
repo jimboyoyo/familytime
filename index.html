@@ -62,6 +62,7 @@
   }
   .toolbar-btn:hover{ border-color:rgba(255,255,255,0.6); }
   .toolbar-btn.active{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  .toolbar-link{ text-decoration:none; display:inline-block; }
 
   .tracking-hint{
     display:none;
@@ -478,6 +479,7 @@
 
 <div id="toolbar">
   <div class="title">FAMILY BOARD</div>
+  <a href="places.html" class="toolbar-btn toolbar-link">Places</a>
   <div class="legend">
     <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-parent)"></span>Parent / child</div>
     <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-spouse)"></span>Spouse</div>
@@ -2629,9 +2631,20 @@ const personPlacesCol = collection(db, 'personPlaces');
       // you're looking at something.
       if (!initialFitDone && nodes.length > 0){
         initialFitDone = true;
+
+        // Arriving from the Places page with a specific person in mind?
+        // Center on them and open their timeline instead of the generic fit.
+        const requestedId = new URLSearchParams(window.location.search).get('openPerson');
+        const requestedNode = requestedId ? nodeById(requestedId) : null;
+
         const posMap = {};
         nodes.forEach(n => { posMap[n.id] = { x: n.x, y: n.y }; });
         fitToPositions(posMap);
+
+        if (requestedNode){
+          centerOn(requestedNode.x, requestedNode.y);
+          openTimelineModal(requestedNode.id);
+        }
       }
 
       setSyncStatus('synced', 'Synced');

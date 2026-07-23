@@ -243,7 +243,7 @@ const peopleCol = collection(db, 'people');
   let personPlaces = [];
   let people = [];
   let selectedPlaceId = null;
-  let marker = null;
+  let markersByPlaceId = {}; // placeId -> Leaflet marker, one persists per place with coordinates
   let previewMarker = null;
 
   function isEditor(){
@@ -302,25 +302,60 @@ const peopleCol = collection(db, 'people');
   });
 
   // ---------- Showing a place ----------
+  // Selecting a place (from the dropdown or by clicking its pin directly)
+  // pans/zooms to it and opens its popup + editor panel. It does NOT create
+  // or remove markers itself — refreshAllMarkers() owns that, so every
+  // place with coordinates stays visible while panning/zooming around.
   function showPlace(placeId){
     selectedPlaceId = placeId;
     const place = placeById(placeId);
     if (!place) return;
 
-    if (marker){ map.removeLayer(marker); marker = null; }
     if (previewMarker){ map.removeLayer(previewMarker); previewMarker = null; }
 
     if (place.lat != null && place.lng != null){
       noPlaceNote.style.display = 'none';
       map.setView([place.lat, place.lng], 14);
-      marker = L.marker([place.lat, place.lng]).addTo(map);
-      marker.bindPopup(buildPopupContent(place));
+      const m = markersByPlaceId[placeId];
+      if (m) m.openPopup();
     } else {
       noPlaceNote.style.display = isEditor() ? 'none' : 'block';
       noPlaceNote.textContent = "This place doesn't have a location recorded yet.";
     }
 
     renderCoordPanel();
+  }
+
+  // Keeps exactly one marker on the map per place that has coordinates,
+  // regardless of which one is currently selected — so panning/zooming
+  // around reveals every registered place, not just the selected one.
+  function refreshAllMarkers(){
+    const currentIds = new Set(places.map(p => p.id));
+
+    // Remove markers for places that were deleted or lost their coordinates
+    Object.keys(markersByPlaceId).forEach(id => {
+      const place = placeById(id);
+      if (!currentIds.has(id) || !place || place.lat == null || place.lng == null){
+        map.removeLayer(markersByPlaceId[id]);
+        delete markersByPlaceId[id];
+      }
+    });
+
+    // Add/update a marker for every place that has coordinates
+    places.forEach(place => {
+      if (place.lat == null || place.lng == null) return;
+      let m = markersByPlaceId[place.id];
+      if (!m){
+        m = L.marker([place.lat, place.lng]);
+        m.addTo(map);
+        m.on('click', () => showPlace(place.id));
+        markersByPlaceId[place.id] = m;
+      } else if (m.setLatLng){
+        m.setLatLng([place.lat, place.lng]);
+      }
+      // Rebuild popup content each time in case people/source-links changed
+      m.bindPopup(buildPopupContent(place));
+    });
   }
 
   function buildPopupContent(place){
@@ -516,17 +551,18 @@ const peopleCol = collection(db, 'people');
     onSnapshot(placesCol, (snap) => {
       places = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       renderPlaceDropdown();
-      if (selectedPlaceId) showPlace(selectedPlaceId);
+      refreshAllMarkers();
+      if (selectedPlaceId) renderCoordPanel();
     }, (err) => console.error('Places sync error', err));
 
     onSnapshot(personPlacesCol, (snap) => {
       personPlaces = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (selectedPlaceId) showPlace(selectedPlaceId);
+      refreshAllMarkers();
     }, (err) => console.error('Person-places sync error', err));
 
     onSnapshot(peopleCol, (snap) => {
       people = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (selectedPlaceId) showPlace(selectedPlaceId);
+      refreshAllMarkers();
     }, (err) => console.error('People sync error', err));
   }
 

@@ -394,7 +394,18 @@ const peopleCol = collection(db, 'people');
     title.textContent = place.name;
     container.appendChild(title);
 
-    const entries = personPlaces.filter(pp => pp.placeId === place.id);
+    const rawEntries = personPlaces.filter(pp => pp.placeId === place.id);
+    // A person can be linked to the same place both as "born here" and
+    // "lived here" — show them only once, with the birth entry winning.
+    const entriesByPerson = new Map();
+    rawEntries.forEach(pp => {
+      const existing = entriesByPerson.get(pp.personId);
+      if (!existing || (existing.type !== 'birth' && pp.type === 'birth')){
+        entriesByPerson.set(pp.personId, pp);
+      }
+    });
+    const entries = Array.from(entriesByPerson.values());
+
     if (!entries.length){
       const p = document.createElement('div');
       p.className = 'popup-empty';

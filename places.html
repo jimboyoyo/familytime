@@ -360,7 +360,28 @@ const peopleCol = collection(db, 'people');
       if (!m){
         m = L.marker([place.lat, place.lng]);
         m.addTo(map);
-        m.on('click', () => showPlace(place.id));
+        const placeId = place.id; // capture the id, not the (later stale) place object
+
+        // Pan/zoom to the place on click. NOTE: deliberately does not call
+        // openPopup() itself — bindPopup() below already gives the marker
+        // its own click-to-open-popup behavior, and calling openPopup()
+        // again here would race with it: Leaflet's internal click handler
+        // treats a popup that's already open as a toggle and immediately
+        // closes it again on the very same click.
+        m.on('click', () => {
+          const p = placeById(placeId);
+          if (p && p.lat != null && p.lng != null) map.setView([p.lat, p.lng], 14);
+        });
+
+        // Whenever this marker's popup actually opens (whether from a
+        // direct pin click or from showPlace() below calling openPopup()
+        // programmatically), keep the rest of the UI in sync.
+        m.on('popupopen', () => {
+          selectedPlaceId = placeId;
+          noPlaceNote.style.display = 'none';
+          renderCoordPanel();
+        });
+
         markersByPlaceId[place.id] = m;
       } else if (m.setLatLng){
         m.setLatLng([place.lat, place.lng]);

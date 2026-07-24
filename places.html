@@ -66,6 +66,7 @@
     z-index:5;
   }
   #coord-panel.open{ display:block; }
+  #coord-panel-header{ display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
   #coord-panel h2{ font-family:var(--font-display); font-size:16px; margin:0 0 8px; }
   #coord-panel h3{ font-family:var(--font-display); font-size:13px; margin:16px 0 8px; border-top:1px solid rgba(0,0,0,0.12); padding-top:12px; }
   .coord-hint{ font-size:11px; color:var(--ink-soft); line-height:1.5; margin:0 0 10px; }
@@ -85,6 +86,13 @@
     background:transparent; color:var(--accent-dark); cursor:pointer; margin-top:10px;
   }
   .btn-secondary:hover{ background:rgba(138,106,52,0.1); }
+
+  .panel-close-btn{
+    background:none; border:none; color:var(--ink-soft);
+    font-size:20px; line-height:1; cursor:pointer; padding:0 2px;
+    flex-shrink:0; margin-top:-2px;
+  }
+  .panel-close-btn:hover{ color:var(--ink); }
 
   .edit-list{ display:flex; flex-direction:column; gap:6px; margin-bottom:4px; }
   .edit-list-empty{ font-size:12px; color:var(--ink-soft); font-style:italic; }
@@ -166,7 +174,10 @@
 <div id="no-place-note">Select a place above to see it on the map.</div>
 
 <div id="coord-panel">
-  <h2 id="coord-panel-title">Place name</h2>
+  <div id="coord-panel-header">
+    <h2 id="coord-panel-title">Place name</h2>
+    <button id="coord-panel-close" type="button" class="panel-close-btn" aria-label="Close" title="Close">&times;</button>
+  </div>
   <p class="coord-hint">Click anywhere on the map to set this place's location, or enter coordinates directly (e.g. copied from Lantm&auml;teriet).</p>
   <div class="coord-row">
     <div>
@@ -270,6 +281,7 @@ const peopleCol = collection(db, 'people');
   const noPlaceNote = document.getElementById('no-place-note');
   const coordPanel = document.getElementById('coord-panel');
   const coordPanelTitle = document.getElementById('coord-panel-title');
+  const coordPanelCloseBtn = document.getElementById('coord-panel-close');
   const coordLatInput = document.getElementById('coord-lat');
   const coordLngInput = document.getElementById('coord-lng');
   const saveCoordsBtn = document.getElementById('save-coords-btn');
@@ -375,7 +387,16 @@ const peopleCol = collection(db, 'people');
     } else {
       const list = document.createElement('div');
       list.className = 'popup-people-list';
-      entries.forEach(pp => {
+      // Sort by birth year, earliest first. People with no recorded birth
+      // year are pushed to the bottom rather than sorted arbitrarily.
+      const sortedEntries = entries.slice().sort((a, b) => {
+        const personA = personById(a.personId);
+        const personB = personById(b.personId);
+        const birthA = personA && personA.birth != null ? personA.birth : Infinity;
+        const birthB = personB && personB.birth != null ? personB.birth : Infinity;
+        return birthA - birthB;
+      });
+      sortedEntries.forEach(pp => {
         const person = personById(pp.personId);
         if (!person) return;
         const row = document.createElement('div');
@@ -425,6 +446,10 @@ const peopleCol = collection(db, 'people');
     coordLngInput.value = place.lng != null ? place.lng : '';
     renderSourceLinksList(place);
   }
+
+  coordPanelCloseBtn.addEventListener('click', () => {
+    coordPanel.classList.remove('open');
+  });
 
   function renderSourceLinksList(place){
     sourceLinksList.innerHTML = '';

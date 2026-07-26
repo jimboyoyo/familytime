@@ -6,6 +6,8 @@
 <title>Family Board</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Courier+Prime:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root{
     --board-bg-1:#c8b184;
@@ -274,13 +276,18 @@
   }
   #timeline-overlay.open{ display:flex; }
   #timeline-modal{
-    width:560px; max-width:92vw;
+    width:1120px; max-width:95vw;
     max-height:78vh;
     background:var(--card-bg);
     border-radius:4px;
     box-shadow:0 12px 30px rgba(0,0,0,0.5);
     display:flex; flex-direction:column;
     overflow:hidden;
+  }
+  .timeline-content-row{
+    display:flex;
+    flex:1;
+    min-height:0; /* let children scroll/size within the row instead of pushing it taller */
   }
   .timeline-header{
     display:flex; align-items:flex-start; justify-content:space-between;
@@ -308,7 +315,41 @@
   .icon-btn:hover{ color:var(--ink); background:rgba(0,0,0,0.06); }
   #timeline-close, #edit-close{ font-size:24px; }
 
-  #timeline-body{ overflow-y:auto; }
+  #timeline-body{
+    flex:1 1 50%;
+    min-width:0;
+    overflow-y:auto;
+    border-right:1px solid rgba(0,0,0,0.15);
+  }
+
+  #timeline-map-col{
+    flex:1 1 50%;
+    min-width:0;
+    position:relative;
+    background:#c8b184;
+  }
+  #timeline-map{
+    position:absolute; top:0; left:0; right:0; bottom:0;
+  }
+  .timeline-map-empty{
+    position:absolute; top:0; left:0; right:0; bottom:0;
+    display:none;
+    align-items:center; justify-content:center;
+    text-align:center; padding:20px;
+    font-family:var(--font-ui); font-size:12px; color:var(--ink-soft);
+    background:var(--card-bg-edge);
+  }
+  .timeline-map-empty.show{ display:flex; }
+
+  .place-popup{ font-family:var(--font-ui); color:var(--ink); }
+  .place-popup b{ font-family:var(--font-display); font-weight:normal; }
+
+  @media (max-width: 720px){
+    #timeline-modal{ width:95vw; max-height:88vh; }
+    .timeline-content-row{ flex-direction:column; }
+    #timeline-body{ flex:1 1 auto; max-height:38vh; border-right:none; border-bottom:1px solid rgba(0,0,0,0.15); }
+    #timeline-map-col{ flex:1 1 auto; min-height:220px; }
+  }
   #timeline-table{ width:100%; table-layout:fixed; border-collapse:collapse; font-family:var(--font-ui); font-size:13px; }
   #timeline-table th:nth-child(1), #timeline-table td:nth-child(1){ width:66px; }
   #timeline-table th:nth-child(2), #timeline-table td:nth-child(2){ width:56%; }
@@ -618,14 +659,20 @@
         <button id="timeline-close" type="button" class="icon-btn" aria-label="Close">&times;</button>
       </div>
     </div>
-    <div id="timeline-body">
-      <table id="timeline-table">
-        <thead>
-          <tr><th>Year</th><th>Event</th><th>Evidence</th></tr>
-        </thead>
-        <tbody id="timeline-tbody"></tbody>
-      </table>
-      <div id="timeline-empty-note" class="timeline-empty-note"></div>
+    <div class="timeline-content-row">
+      <div id="timeline-body">
+        <table id="timeline-table">
+          <thead>
+            <tr><th>Year</th><th>Event</th><th>Evidence</th></tr>
+          </thead>
+          <tbody id="timeline-tbody"></tbody>
+        </table>
+        <div id="timeline-empty-note" class="timeline-empty-note"></div>
+      </div>
+      <div id="timeline-map-col">
+        <div id="timeline-map"></div>
+        <div id="timeline-map-empty" class="timeline-map-empty">No places with a recorded location yet.</div>
+      </div>
     </div>
   </div>
 </div>
@@ -1962,7 +2009,69 @@ const personPlacesCol = collection(db, 'personPlaces');
   const timelineTable = document.getElementById('timeline-table');
   const timelineTbody = document.getElementById('timeline-tbody');
   const timelineEmptyNote = document.getElementById('timeline-empty-note');
+  const timelineMapEmptyEl = document.getElementById('timeline-map-empty');
   let currentTimelinePersonId = null;
+
+  // ---------- Per-person map (right half of the timeline modal) ----------
+  let timelineMap = null;
+  let timelineMapMarkers = [];
+  let timelineMapLine = null;
+
+  function ensureTimelineMap(){
+    if (timelineMap) return timelineMap;
+    timelineMap = L.map('timeline-map', { attributionControl: true }).setView([59.3293, 18.0686], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(timelineMap);
+    return timelineMap;
+  }
+
+  // Shows every place this person has coordinates for (birthplace + places
+  // lived), connected in order with a line so the map reads as "the path
+  // this person's life took" \u2014 then frames the view on the birthplace,
+  // since that's the natural starting point of that path.
+  function updateTimelineMap(personId){
+    const map = ensureTimelineMap();
+
+    timelineMapMarkers.forEach(m => map.removeLayer(m));
+    timelineMapMarkers = [];
+    if (timelineMapLine){ map.removeLayer(timelineMapLine); timelineMapLine = null; }
+
+    const entries = placesForPerson(personId)
+      .filter(pp => pp.place.lat != null && pp.place.lng != null)
+      .sort((a, b) => (a.type === 'birth' ? -1 : 0) - (b.type === 'birth' ? -1 : 0));
+
+    if (!entries.length){
+      timelineMapEmptyEl.classList.add('show');
+      setTimeout(() => map.invalidateSize(), 50);
+      return;
+    }
+    timelineMapEmptyEl.classList.remove('show');
+
+    const latlngs = entries.map(entry => [entry.place.lat, entry.place.lng]);
+    entries.forEach((entry, i) => {
+      const marker = L.marker(latlngs[i]).addTo(map);
+      const label = entry.type === 'birth' ? 'Born here' : 'Lived here';
+      marker.bindPopup(`<div class="place-popup"><b>${escapeHtml(entry.place.name)}</b><br>${label}</div>`);
+      timelineMapMarkers.push(marker);
+    });
+
+    if (latlngs.length > 1){
+      timelineMapLine = L.polyline(latlngs, { color: '#2b6fb3', weight: 3, opacity: 0.8 }).addTo(map);
+    }
+
+    const birthEntry = entries.find(e => e.type === 'birth');
+    const focusPoint = birthEntry ? [birthEntry.place.lat, birthEntry.place.lng] : latlngs[0];
+
+    // The modal (and therefore the map container) may have just become
+    // visible, so give Leaflet a tick to measure its real size before
+    // framing the view \u2014 otherwise it can render at the wrong size/offset.
+    setTimeout(() => {
+      map.invalidateSize();
+      map.setView(focusPoint, 13);
+    }, 50);
+  }
 
   function eventsForPerson(personId){
     return events
@@ -2008,6 +2117,7 @@ const personPlacesCol = collection(db, 'personPlaces');
       timelineEmptyNote.style.display = 'block';
       timelineEmptyNote.textContent = 'No life events recorded yet. Click the pencil icon to add some.';
       timelineOverlay.classList.add('open');
+      updateTimelineMap(personId);
       return;
     }
 
@@ -2070,6 +2180,7 @@ const personPlacesCol = collection(db, 'personPlaces');
     });
 
     timelineOverlay.classList.add('open');
+    updateTimelineMap(personId);
   }
 
   document.getElementById('timeline-close').addEventListener('click', () => {

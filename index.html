@@ -277,7 +277,7 @@
   #timeline-overlay.open{ display:flex; }
   #timeline-modal{
     width:1120px; max-width:95vw;
-    max-height:78vh;
+    height:70vh; max-height:70vh;
     background:var(--card-bg);
     border-radius:4px;
     box-shadow:0 12px 30px rgba(0,0,0,0.5);
@@ -345,7 +345,7 @@
   .place-popup b{ font-family:var(--font-display); font-weight:normal; }
 
   @media (max-width: 720px){
-    #timeline-modal{ width:95vw; max-height:88vh; }
+    #timeline-modal{ width:95vw; height:88vh; max-height:88vh; }
     .timeline-content-row{ flex-direction:column; }
     #timeline-body{ flex:1 1 auto; max-height:38vh; border-right:none; border-bottom:1px solid rgba(0,0,0,0.15); }
     #timeline-map-col{ flex:1 1 auto; min-height:220px; }

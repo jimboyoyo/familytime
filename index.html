@@ -473,6 +473,29 @@
     font-size:15px; line-height:1; cursor:pointer; padding:0 2px; flex-shrink:0;
   }
   .item-remove:hover{ color:#7a1f1f; }
+
+  /* ---------- Person search ---------- */
+  .search-wrap{ position:relative; }
+  .search-input{
+    background:var(--panel-bg);
+    color:var(--panel-ink);
+    border:1px solid rgba(255,255,255,0.25);
+    border-radius:4px;
+    font-family:var(--font-ui);
+    font-size:12px;
+    padding:6px 9px;
+    width:170px;
+  }
+  .search-input::placeholder{ color:#9a9382; }
+  .search-input:focus{ outline:none; border-color:var(--accent); }
+  .search-suggestions{
+    position:absolute; top:calc(100% + 4px); left:0; width:260px;
+    z-index:15;
+    background:#fffdf6;
+  }
+  .search-no-results{
+    padding:8px 9px; font-size:12px; color:var(--ink-soft); font-style:italic;
+  }
 </style>
 </head>
 <body>
@@ -480,6 +503,10 @@
 <div id="toolbar">
   <div class="title">FAMILY BOARD</div>
   <a href="places.html" class="toolbar-btn toolbar-link">Places</a>
+  <div class="search-wrap" id="search-wrap">
+    <input id="person-search" type="text" class="search-input" placeholder="Search people..." autocomplete="off">
+    <div id="search-suggestions" class="suggestions search-suggestions"></div>
+  </div>
   <div class="legend">
     <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-parent)"></span>Parent / child</div>
     <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-spouse)"></span>Spouse</div>
@@ -1627,6 +1654,68 @@ const personPlacesCol = collection(db, 'personPlaces');
     worldEl.classList.add('smooth');
     applyCamera();
   }
+
+  // ---------- Person search ----------
+  const personSearchInput = document.getElementById('person-search');
+  const searchSuggestionsEl = document.getElementById('search-suggestions');
+
+  function updateSearchSuggestions(){
+    const q = personSearchInput.value.trim().toLowerCase();
+    searchSuggestionsEl.innerHTML = '';
+    if (!q){ searchSuggestionsEl.classList.remove('open'); return; }
+    const matches = nodes
+      .filter(n => n.name.toLowerCase().includes(q) || (n.maidenName && n.maidenName.toLowerCase().includes(q)))
+      .slice(0, 8);
+    if (!matches.length){
+      const empty = document.createElement('div');
+      empty.className = 'search-no-results';
+      empty.textContent = 'No matching people';
+      searchSuggestionsEl.appendChild(empty);
+      searchSuggestionsEl.classList.add('open');
+      return;
+    }
+    matches.forEach(m => {
+      const item = document.createElement('div');
+      item.className = 'suggestion-item';
+      const dates = (m.birth || m.death) ? `${m.birth || '?'}\u2013${m.death || 'living'}` : '';
+      const maiden = m.maidenName ? ` (n\u00e9e ${m.maidenName})` : '';
+      item.innerHTML = `${escapeHtml(m.name)}${escapeHtml(maiden)}${dates ? `<span class="s-dates">${escapeHtml(dates)}</span>` : ''}`;
+      item.addEventListener('click', () => goToSearchResult(m));
+      searchSuggestionsEl.appendChild(item);
+    });
+    searchSuggestionsEl.classList.add('open');
+  }
+
+  function goToSearchResult(node){
+    personSearchInput.value = '';
+    searchSuggestionsEl.classList.remove('open');
+    searchSuggestionsEl.innerHTML = '';
+    centerOn(node.x, node.y);
+    openTimelineModal(node.id);
+  }
+
+  personSearchInput.addEventListener('input', updateSearchSuggestions);
+  personSearchInput.addEventListener('focus', () => {
+    if (personSearchInput.value.trim()) updateSearchSuggestions();
+  });
+  personSearchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter'){
+      e.preventDefault();
+      const q = personSearchInput.value.trim().toLowerCase();
+      if (!q) return;
+      const match = nodes.find(n => n.name.toLowerCase() === q) ||
+        nodes.find(n => n.name.toLowerCase().includes(q) || (n.maidenName && n.maidenName.toLowerCase().includes(q)));
+      if (match) goToSearchResult(match);
+    } else if (e.key === 'Escape'){
+      searchSuggestionsEl.classList.remove('open');
+      personSearchInput.blur();
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (e.target !== personSearchInput && !e.target.closest('#search-suggestions')){
+      searchSuggestionsEl.classList.remove('open');
+    }
+  });
 
   // ---------- Background pan (click-and-drag to move the view) ----------
   function attachPan(){

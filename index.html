@@ -6,8 +6,6 @@
 <title>Family Board</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Courier+Prime:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root{
     --board-bg-1:#c8b184;
@@ -276,18 +274,13 @@
   }
   #timeline-overlay.open{ display:flex; }
   #timeline-modal{
-    width:1120px; max-width:95vw;
-    height:70vh; max-height:70vh;
+    width:560px; max-width:92vw;
+    max-height:78vh;
     background:var(--card-bg);
     border-radius:4px;
     box-shadow:0 12px 30px rgba(0,0,0,0.5);
     display:flex; flex-direction:column;
     overflow:hidden;
-  }
-  .timeline-content-row{
-    display:flex;
-    flex:1;
-    min-height:0; /* let children scroll/size within the row instead of pushing it taller */
   }
   .timeline-header{
     display:flex; align-items:flex-start; justify-content:space-between;
@@ -315,41 +308,7 @@
   .icon-btn:hover{ color:var(--ink); background:rgba(0,0,0,0.06); }
   #timeline-close, #edit-close{ font-size:24px; }
 
-  #timeline-body{
-    flex:1 1 50%;
-    min-width:0;
-    overflow-y:auto;
-    border-right:1px solid rgba(0,0,0,0.15);
-  }
-
-  #timeline-map-col{
-    flex:1 1 50%;
-    min-width:0;
-    position:relative;
-    background:#c8b184;
-  }
-  #timeline-map{
-    position:absolute; top:0; left:0; right:0; bottom:0;
-  }
-  .timeline-map-empty{
-    position:absolute; top:0; left:0; right:0; bottom:0;
-    display:none;
-    align-items:center; justify-content:center;
-    text-align:center; padding:20px;
-    font-family:var(--font-ui); font-size:12px; color:var(--ink-soft);
-    background:var(--card-bg-edge);
-  }
-  .timeline-map-empty.show{ display:flex; }
-
-  .place-popup{ font-family:var(--font-ui); color:var(--ink); }
-  .place-popup b{ font-family:var(--font-display); font-weight:normal; }
-
-  @media (max-width: 720px){
-    #timeline-modal{ width:95vw; height:88vh; max-height:88vh; }
-    .timeline-content-row{ flex-direction:column; }
-    #timeline-body{ flex:1 1 auto; max-height:38vh; border-right:none; border-bottom:1px solid rgba(0,0,0,0.15); }
-    #timeline-map-col{ flex:1 1 auto; min-height:220px; }
-  }
+  #timeline-body{ overflow-y:auto; }
   #timeline-table{ width:100%; table-layout:fixed; border-collapse:collapse; font-family:var(--font-ui); font-size:13px; }
   #timeline-table th:nth-child(1), #timeline-table td:nth-child(1){ width:66px; }
   #timeline-table th:nth-child(2), #timeline-table td:nth-child(2){ width:56%; }
@@ -514,29 +473,6 @@
     font-size:15px; line-height:1; cursor:pointer; padding:0 2px; flex-shrink:0;
   }
   .item-remove:hover{ color:#7a1f1f; }
-
-  /* ---------- Person search ---------- */
-  .search-wrap{ position:relative; }
-  .search-input{
-    background:var(--panel-bg);
-    color:var(--panel-ink);
-    border:1px solid rgba(255,255,255,0.25);
-    border-radius:4px;
-    font-family:var(--font-ui);
-    font-size:12px;
-    padding:6px 9px;
-    width:170px;
-  }
-  .search-input::placeholder{ color:#9a9382; }
-  .search-input:focus{ outline:none; border-color:var(--accent); }
-  .search-suggestions{
-    position:absolute; top:calc(100% + 4px); left:0; width:260px;
-    z-index:15;
-    background:#fffdf6;
-  }
-  .search-no-results{
-    padding:8px 9px; font-size:12px; color:var(--ink-soft); font-style:italic;
-  }
 </style>
 </head>
 <body>
@@ -544,10 +480,6 @@
 <div id="toolbar">
   <div class="title">FAMILY BOARD</div>
   <a href="places.html" class="toolbar-btn toolbar-link">Places</a>
-  <div class="search-wrap" id="search-wrap">
-    <input id="person-search" type="text" class="search-input" placeholder="Search people..." autocomplete="off">
-    <div id="search-suggestions" class="suggestions search-suggestions"></div>
-  </div>
   <div class="legend">
     <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-parent)"></span>Parent / child</div>
     <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-spouse)"></span>Spouse</div>
@@ -564,6 +496,7 @@
   <button id="track-lineage-btn" type="button" class="toolbar-btn">Track lineage</button>
   <button id="track-relation-btn" type="button" class="toolbar-btn">Track relation</button>
   <span id="tracking-hint" class="tracking-hint">Click a person to trace their ancestors</span>
+  <button id="export-btn" type="button" class="toolbar-btn">Export backup</button>
   <div class="count" id="person-count">0 people</div>
   <div class="auth-status" id="auth-status">
     <span id="auth-status-label">Viewing only</span>
@@ -659,20 +592,14 @@
         <button id="timeline-close" type="button" class="icon-btn" aria-label="Close">&times;</button>
       </div>
     </div>
-    <div class="timeline-content-row">
-      <div id="timeline-body">
-        <table id="timeline-table">
-          <thead>
-            <tr><th>Year</th><th>Event</th><th>Evidence</th></tr>
-          </thead>
-          <tbody id="timeline-tbody"></tbody>
-        </table>
-        <div id="timeline-empty-note" class="timeline-empty-note"></div>
-      </div>
-      <div id="timeline-map-col">
-        <div id="timeline-map"></div>
-        <div id="timeline-map-empty" class="timeline-map-empty">No places with a recorded location yet.</div>
-      </div>
+    <div id="timeline-body">
+      <table id="timeline-table">
+        <thead>
+          <tr><th>Year</th><th>Event</th><th>Evidence</th></tr>
+        </thead>
+        <tbody id="timeline-tbody"></tbody>
+      </table>
+      <div id="timeline-empty-note" class="timeline-empty-note"></div>
     </div>
   </div>
 </div>
@@ -773,7 +700,7 @@ import {
   getAuth, signInAnonymously, onAuthStateChanged, signInWithEmailAndPassword, signOut
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js';
 import {
-  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch
+  getFirestore, collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, writeBatch, getDocs
 } from 'https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js';
 
 // Your web app's Firebase configuration.
@@ -1694,6 +1621,56 @@ const personPlacesCol = collection(db, 'personPlaces');
     }
   });
 
+  // ---------- Backup export ----------
+  // Reads every collection directly from Firestore (not the local cache),
+  // so the export reflects exactly what's actually saved, and bundles it
+  // into one JSON file the user downloads and keeps themselves. Read-only;
+  // never requires signing in, since viewing already implies read access.
+  const exportBtn = document.getElementById('export-btn');
+
+  async function exportBackup(){
+    if (!requireEditor()) return;
+    const originalLabel = exportBtn.textContent;
+    exportBtn.textContent = 'Exporting...';
+    exportBtn.disabled = true;
+    try {
+      const collections = {
+        people: peopleCol,
+        links: linksCol,
+        events: eventsCol,
+        places: placesCol,
+        personPlaces: personPlacesCol
+      };
+      const backup = { exportedAt: new Date().toISOString() };
+      for (const [key, colRef] of Object.entries(collections)){
+        const snap = await getDocs(colRef);
+        backup[key] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      }
+
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const stamp = backup.exportedAt.slice(0, 19).replace(/[:T]/g, '-');
+      a.href = url;
+      a.download = `family-board-backup-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      exportBtn.textContent = 'Exported \u2713';
+    } catch (err){
+      console.error('Failed to export backup', err);
+      exportBtn.textContent = 'Export failed';
+    } finally {
+      setTimeout(() => {
+        exportBtn.textContent = originalLabel;
+        exportBtn.disabled = false;
+      }, 2200);
+    }
+  }
+
+  exportBtn.addEventListener('click', exportBackup);
+
   // ---------- Moving the camera to a point ----------
   function centerOn(x, y){
     camX = canvasEl.clientWidth / 2 - x * camScale;
@@ -1701,68 +1678,6 @@ const personPlacesCol = collection(db, 'personPlaces');
     worldEl.classList.add('smooth');
     applyCamera();
   }
-
-  // ---------- Person search ----------
-  const personSearchInput = document.getElementById('person-search');
-  const searchSuggestionsEl = document.getElementById('search-suggestions');
-
-  function updateSearchSuggestions(){
-    const q = personSearchInput.value.trim().toLowerCase();
-    searchSuggestionsEl.innerHTML = '';
-    if (!q){ searchSuggestionsEl.classList.remove('open'); return; }
-    const matches = nodes
-      .filter(n => n.name.toLowerCase().includes(q) || (n.maidenName && n.maidenName.toLowerCase().includes(q)))
-      .slice(0, 8);
-    if (!matches.length){
-      const empty = document.createElement('div');
-      empty.className = 'search-no-results';
-      empty.textContent = 'No matching people';
-      searchSuggestionsEl.appendChild(empty);
-      searchSuggestionsEl.classList.add('open');
-      return;
-    }
-    matches.forEach(m => {
-      const item = document.createElement('div');
-      item.className = 'suggestion-item';
-      const dates = (m.birth || m.death) ? `${m.birth || '?'}\u2013${m.death || 'living'}` : '';
-      const maiden = m.maidenName ? ` (n\u00e9e ${m.maidenName})` : '';
-      item.innerHTML = `${escapeHtml(m.name)}${escapeHtml(maiden)}${dates ? `<span class="s-dates">${escapeHtml(dates)}</span>` : ''}`;
-      item.addEventListener('click', () => goToSearchResult(m));
-      searchSuggestionsEl.appendChild(item);
-    });
-    searchSuggestionsEl.classList.add('open');
-  }
-
-  function goToSearchResult(node){
-    personSearchInput.value = '';
-    searchSuggestionsEl.classList.remove('open');
-    searchSuggestionsEl.innerHTML = '';
-    centerOn(node.x, node.y);
-    openTimelineModal(node.id);
-  }
-
-  personSearchInput.addEventListener('input', updateSearchSuggestions);
-  personSearchInput.addEventListener('focus', () => {
-    if (personSearchInput.value.trim()) updateSearchSuggestions();
-  });
-  personSearchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter'){
-      e.preventDefault();
-      const q = personSearchInput.value.trim().toLowerCase();
-      if (!q) return;
-      const match = nodes.find(n => n.name.toLowerCase() === q) ||
-        nodes.find(n => n.name.toLowerCase().includes(q) || (n.maidenName && n.maidenName.toLowerCase().includes(q)));
-      if (match) goToSearchResult(match);
-    } else if (e.key === 'Escape'){
-      searchSuggestionsEl.classList.remove('open');
-      personSearchInput.blur();
-    }
-  });
-  document.addEventListener('click', (e) => {
-    if (e.target !== personSearchInput && !e.target.closest('#search-suggestions')){
-      searchSuggestionsEl.classList.remove('open');
-    }
-  });
 
   // ---------- Background pan (click-and-drag to move the view) ----------
   function attachPan(){
@@ -2009,69 +1924,7 @@ const personPlacesCol = collection(db, 'personPlaces');
   const timelineTable = document.getElementById('timeline-table');
   const timelineTbody = document.getElementById('timeline-tbody');
   const timelineEmptyNote = document.getElementById('timeline-empty-note');
-  const timelineMapEmptyEl = document.getElementById('timeline-map-empty');
   let currentTimelinePersonId = null;
-
-  // ---------- Per-person map (right half of the timeline modal) ----------
-  let timelineMap = null;
-  let timelineMapMarkers = [];
-  let timelineMapLine = null;
-
-  function ensureTimelineMap(){
-    if (timelineMap) return timelineMap;
-    timelineMap = L.map('timeline-map', { attributionControl: true }).setView([59.3293, 18.0686], 5);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 18,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(timelineMap);
-    return timelineMap;
-  }
-
-  // Shows every place this person has coordinates for (birthplace + places
-  // lived), connected in order with a line so the map reads as "the path
-  // this person's life took" \u2014 then frames the view on the birthplace,
-  // since that's the natural starting point of that path.
-  function updateTimelineMap(personId){
-    const map = ensureTimelineMap();
-
-    timelineMapMarkers.forEach(m => map.removeLayer(m));
-    timelineMapMarkers = [];
-    if (timelineMapLine){ map.removeLayer(timelineMapLine); timelineMapLine = null; }
-
-    const entries = placesForPerson(personId)
-      .filter(pp => pp.place.lat != null && pp.place.lng != null)
-      .sort((a, b) => (a.type === 'birth' ? -1 : 0) - (b.type === 'birth' ? -1 : 0));
-
-    if (!entries.length){
-      timelineMapEmptyEl.classList.add('show');
-      setTimeout(() => map.invalidateSize(), 50);
-      return;
-    }
-    timelineMapEmptyEl.classList.remove('show');
-
-    const latlngs = entries.map(entry => [entry.place.lat, entry.place.lng]);
-    entries.forEach((entry, i) => {
-      const marker = L.marker(latlngs[i]).addTo(map);
-      const label = entry.type === 'birth' ? 'Born here' : 'Lived here';
-      marker.bindPopup(`<div class="place-popup"><b>${escapeHtml(entry.place.name)}</b><br>${label}</div>`);
-      timelineMapMarkers.push(marker);
-    });
-
-    if (latlngs.length > 1){
-      timelineMapLine = L.polyline(latlngs, { color: '#2b6fb3', weight: 3, opacity: 0.8 }).addTo(map);
-    }
-
-    const birthEntry = entries.find(e => e.type === 'birth');
-    const focusPoint = birthEntry ? [birthEntry.place.lat, birthEntry.place.lng] : latlngs[0];
-
-    // The modal (and therefore the map container) may have just become
-    // visible, so give Leaflet a tick to measure its real size before
-    // framing the view \u2014 otherwise it can render at the wrong size/offset.
-    setTimeout(() => {
-      map.invalidateSize();
-      map.setView(focusPoint, 13);
-    }, 50);
-  }
 
   function eventsForPerson(personId){
     return events
@@ -2117,7 +1970,6 @@ const personPlacesCol = collection(db, 'personPlaces');
       timelineEmptyNote.style.display = 'block';
       timelineEmptyNote.textContent = 'No life events recorded yet. Click the pencil icon to add some.';
       timelineOverlay.classList.add('open');
-      updateTimelineMap(personId);
       return;
     }
 
@@ -2180,7 +2032,6 @@ const personPlacesCol = collection(db, 'personPlaces');
     });
 
     timelineOverlay.classList.add('open');
-    updateTimelineMap(personId);
   }
 
   document.getElementById('timeline-close').addEventListener('click', () => {

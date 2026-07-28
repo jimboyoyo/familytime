@@ -106,7 +106,6 @@
     width:40000px;
     height:40000px;
     transform-origin:0 0;
-    will-change:transform;
   }
   #world.smooth{ transition:transform 0.18s ease-out; }
 
@@ -1017,8 +1016,20 @@ const personPlacesCol = collection(db, 'personPlaces');
   let camX = 0, camY = 0, camScale = 1;
   const MIN_ZOOM = 0.3, MAX_ZOOM = 2.5;
 
+  // will-change is applied only while the camera is actively moving, not
+  // permanently. #world is a 40000x40000 layer — leaving it GPU-layer-promoted
+  // at all times makes browsers cap the backing-store resolution (to avoid an
+  // enormous texture allocation), which shows up as blurry text/badges once
+  // zoomed in. Toggling it off shortly after motion settles lets the browser
+  // re-rasterize #world at full, crisp resolution for the (much more common)
+  // case of just reading the board, while still getting the smoothness
+  // benefit during the pan/zoom gesture itself.
+  let willChangeTimer = null;
   function applyCamera(){
+    worldEl.style.willChange = 'transform';
     worldEl.style.transform = `translate(${camX}px, ${camY}px) scale(${camScale})`;
+    clearTimeout(willChangeTimer);
+    willChangeTimer = setTimeout(() => { worldEl.style.willChange = 'auto'; }, 250);
   }
 
   // ---------- Drag ----------

@@ -6,6 +6,8 @@
 <title>Family Board</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Courier+Prime:wght@400;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root{
     --board-bg-1:#c8b184;
@@ -276,13 +278,18 @@
   }
   #timeline-overlay.open{ display:flex; }
   #timeline-modal{
-    width:560px; max-width:92vw;
-    max-height:78vh;
+    width:1120px; max-width:95vw;
+    height:70vh; max-height:70vh;
     background:var(--card-bg);
     border-radius:4px;
     box-shadow:0 12px 30px rgba(0,0,0,0.5);
     display:flex; flex-direction:column;
     overflow:hidden;
+  }
+  .timeline-content-row{
+    display:flex;
+    flex:1;
+    min-height:0; /* let children scroll/size within the row instead of pushing it taller */
   }
   .timeline-header{
     display:flex; align-items:flex-start; justify-content:space-between;
@@ -310,7 +317,41 @@
   .icon-btn:hover{ color:var(--ink); background:rgba(0,0,0,0.06); }
   #timeline-close, #edit-close{ font-size:24px; }
 
-  #timeline-body{ overflow-y:auto; }
+  #timeline-body{
+    flex:1 1 50%;
+    min-width:0;
+    overflow-y:auto;
+    border-right:1px solid rgba(0,0,0,0.15);
+  }
+
+  #timeline-map-col{
+    flex:1 1 50%;
+    min-width:0;
+    position:relative;
+    background:#c8b184;
+  }
+  #timeline-map{
+    position:absolute; top:0; left:0; right:0; bottom:0;
+  }
+  .timeline-map-empty{
+    position:absolute; top:0; left:0; right:0; bottom:0;
+    display:none;
+    align-items:center; justify-content:center;
+    text-align:center; padding:20px;
+    font-family:var(--font-ui); font-size:12px; color:var(--ink-soft);
+    background:var(--card-bg-edge);
+  }
+  .timeline-map-empty.show{ display:flex; }
+
+  .place-popup{ font-family:var(--font-ui); color:var(--ink); }
+  .place-popup b{ font-family:var(--font-display); font-weight:normal; }
+
+  @media (max-width: 720px){
+    #timeline-modal{ width:95vw; height:88vh; max-height:88vh; }
+    .timeline-content-row{ flex-direction:column; }
+    #timeline-body{ flex:1 1 auto; max-height:38vh; border-right:none; border-bottom:1px solid rgba(0,0,0,0.15); }
+    #timeline-map-col{ flex:1 1 auto; min-height:220px; }
+  }
   #timeline-table{ width:100%; table-layout:fixed; border-collapse:collapse; font-family:var(--font-ui); font-size:13px; }
   #timeline-table th:nth-child(1), #timeline-table td:nth-child(1){ width:66px; }
   #timeline-table th:nth-child(2), #timeline-table td:nth-child(2){ width:56%; }
@@ -475,6 +516,29 @@
     font-size:15px; line-height:1; cursor:pointer; padding:0 2px; flex-shrink:0;
   }
   .item-remove:hover{ color:#7a1f1f; }
+
+  /* ---------- Person search ---------- */
+  .search-wrap{ position:relative; }
+  .search-input{
+    background:var(--panel-bg);
+    color:var(--panel-ink);
+    border:1px solid rgba(255,255,255,0.25);
+    border-radius:4px;
+    font-family:var(--font-ui);
+    font-size:12px;
+    padding:6px 9px;
+    width:170px;
+  }
+  .search-input::placeholder{ color:#9a9382; }
+  .search-input:focus{ outline:none; border-color:var(--accent); }
+  .search-suggestions{
+    position:absolute; top:calc(100% + 4px); left:0; width:260px;
+    z-index:15;
+    background:#fffdf6;
+  }
+  .search-no-results{
+    padding:8px 9px; font-size:12px; color:var(--ink-soft); font-style:italic;
+  }
 </style>
 </head>
 <body>
@@ -482,6 +546,10 @@
 <div id="toolbar">
   <div class="title">FAMILY BOARD</div>
   <a href="places.html" class="toolbar-btn toolbar-link">Places</a>
+  <div class="search-wrap" id="search-wrap">
+    <input id="person-search" type="text" class="search-input" placeholder="Search people..." autocomplete="off">
+    <div id="search-suggestions" class="suggestions search-suggestions"></div>
+  </div>
   <div class="legend">
     <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-parent)"></span>Parent / child</div>
     <div class="legend-item"><span class="legend-swatch" style="background:var(--thread-spouse)"></span>Spouse</div>
@@ -593,14 +661,20 @@
         <button id="timeline-close" type="button" class="icon-btn" aria-label="Close">&times;</button>
       </div>
     </div>
-    <div id="timeline-body">
-      <table id="timeline-table">
-        <thead>
-          <tr><th>Year</th><th>Event</th><th>Evidence</th></tr>
-        </thead>
-        <tbody id="timeline-tbody"></tbody>
-      </table>
-      <div id="timeline-empty-note" class="timeline-empty-note"></div>
+    <div class="timeline-content-row">
+      <div id="timeline-body">
+        <table id="timeline-table">
+          <thead>
+            <tr><th>Year</th><th>Event</th><th>Evidence</th></tr>
+          </thead>
+          <tbody id="timeline-tbody"></tbody>
+        </table>
+        <div id="timeline-empty-note" class="timeline-empty-note"></div>
+      </div>
+      <div id="timeline-map-col">
+        <div id="timeline-map"></div>
+        <div id="timeline-map-empty" class="timeline-map-empty">No places with a recorded location yet.</div>
+      </div>
     </div>
   </div>
 </div>
@@ -847,6 +921,58 @@ const personPlacesCol = collection(db, 'personPlaces');
   // ---------- Rendering ----------
   function escapeHtml(str){
     return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // ---------- Reusable "type to filter, click to pick" dropdown ----------
+  // Backs the person search box, the "add relative" name field, and the
+  // "add place" field \u2014 these used to be three separate, near-identical
+  // implementations. The caller wires up its own input listener (so it can
+  // run extra logic first, e.g. resetting a selection) and calls
+  // .refresh() to recompute/redraw the list.
+  function attachAutocomplete({ input, panel, getMatches, renderItem, onSelect, emptyText }){
+    function close(){
+      panel.classList.remove('open');
+      panel.innerHTML = '';
+    }
+    function refresh(){
+      const q = input.value.trim().toLowerCase();
+      panel.innerHTML = '';
+      if (!q){ panel.classList.remove('open'); return; }
+      const matches = getMatches(q);
+      if (!matches.length){
+        if (emptyText){
+          const empty = document.createElement('div');
+          empty.className = 'search-no-results';
+          empty.textContent = emptyText;
+          panel.appendChild(empty);
+          panel.classList.add('open');
+        } else {
+          panel.classList.remove('open');
+        }
+        return;
+      }
+      matches.forEach(m => {
+        const item = document.createElement('div');
+        item.className = 'suggestion-item';
+        renderItem(item, m);
+        item.addEventListener('click', () => { onSelect(m); close(); });
+        panel.appendChild(item);
+      });
+      panel.classList.add('open');
+    }
+    document.addEventListener('click', (e) => {
+      if (e.target !== input && !e.target.closest('#' + panel.id)) panel.classList.remove('open');
+    });
+    return { refresh, close, getMatches };
+  }
+
+  // Shared renderer for the two dropdowns that suggest existing people
+  // (search box + "add relative" name field) \u2014 name, optional maiden
+  // name, optional birth\u2013death years.
+  function renderPersonSuggestion(item, m){
+    const dates = (m.birth || m.death) ? `${m.birth || '?'}\u2013${m.death || 'living'}` : '';
+    const maiden = m.maidenName ? ` (n\u00e9e ${m.maidenName})` : '';
+    item.innerHTML = `${escapeHtml(m.name)}${escapeHtml(maiden)}${dates ? `<span class="s-dates">${escapeHtml(dates)}</span>` : ''}`;
   }
 
   function linkPath(sx, sy, tx, ty){
@@ -1642,6 +1768,47 @@ const personPlacesCol = collection(db, 'personPlaces');
     applyCamera();
   }
 
+  // ---------- Person search ----------
+  const personSearchInput = document.getElementById('person-search');
+  const searchSuggestionsEl = document.getElementById('search-suggestions');
+
+  function updateSearchSuggestions(){ personAutocomplete.refresh(); }
+
+  const personAutocomplete = attachAutocomplete({
+    input: personSearchInput,
+    panel: searchSuggestionsEl,
+    getMatches: (q) => nodes
+      .filter(n => n.name.toLowerCase().includes(q) || (n.maidenName && n.maidenName.toLowerCase().includes(q)))
+      .slice(0, 8),
+    renderItem: renderPersonSuggestion,
+    onSelect: goToSearchResult,
+    emptyText: 'No matching people'
+  });
+
+  function goToSearchResult(node){
+    personSearchInput.value = '';
+    personAutocomplete.close();
+    centerOn(node.x, node.y);
+    openTimelineModal(node.id);
+  }
+
+  personSearchInput.addEventListener('input', updateSearchSuggestions);
+  personSearchInput.addEventListener('focus', () => {
+    if (personSearchInput.value.trim()) updateSearchSuggestions();
+  });
+  personSearchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter'){
+      e.preventDefault();
+      const q = personSearchInput.value.trim().toLowerCase();
+      if (!q) return;
+      const match = nodes.find(n => n.name.toLowerCase() === q) || personAutocomplete.getMatches(q)[0];
+      if (match) goToSearchResult(match);
+    } else if (e.key === 'Escape'){
+      personAutocomplete.close();
+      personSearchInput.blur();
+    }
+  });
+
   // ---------- Background pan (click-and-drag to move the view) ----------
   function attachPan(){
     let panning = false;
@@ -1891,7 +2058,69 @@ const personPlacesCol = collection(db, 'personPlaces');
   const timelineTable = document.getElementById('timeline-table');
   const timelineTbody = document.getElementById('timeline-tbody');
   const timelineEmptyNote = document.getElementById('timeline-empty-note');
+  const timelineMapEmptyEl = document.getElementById('timeline-map-empty');
   let currentTimelinePersonId = null;
+
+  // ---------- Per-person map (right half of the timeline modal) ----------
+  let timelineMap = null;
+  let timelineMapMarkers = [];
+  let timelineMapLine = null;
+
+  function ensureTimelineMap(){
+    if (timelineMap) return timelineMap;
+    timelineMap = L.map('timeline-map', { attributionControl: true }).setView([59.3293, 18.0686], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(timelineMap);
+    return timelineMap;
+  }
+
+  // Shows every place this person has coordinates for (birthplace + places
+  // lived), connected in order with a line so the map reads as "the path
+  // this person's life took" \u2014 then frames the view on the birthplace,
+  // since that's the natural starting point of that path.
+  function updateTimelineMap(personId){
+    const map = ensureTimelineMap();
+
+    timelineMapMarkers.forEach(m => map.removeLayer(m));
+    timelineMapMarkers = [];
+    if (timelineMapLine){ map.removeLayer(timelineMapLine); timelineMapLine = null; }
+
+    const entries = placesForPerson(personId)
+      .filter(pp => pp.place.lat != null && pp.place.lng != null)
+      .sort((a, b) => (a.type === 'birth' ? -1 : 0) - (b.type === 'birth' ? -1 : 0));
+
+    if (!entries.length){
+      timelineMapEmptyEl.classList.add('show');
+      setTimeout(() => map.invalidateSize(), 50);
+      return;
+    }
+    timelineMapEmptyEl.classList.remove('show');
+
+    const latlngs = entries.map(entry => [entry.place.lat, entry.place.lng]);
+    entries.forEach((entry, i) => {
+      const marker = L.marker(latlngs[i]).addTo(map);
+      const label = entry.type === 'birth' ? 'Born here' : 'Lived here';
+      marker.bindPopup(`<div class="place-popup"><b>${escapeHtml(entry.place.name)}</b><br>${label}</div>`);
+      timelineMapMarkers.push(marker);
+    });
+
+    if (latlngs.length > 1){
+      timelineMapLine = L.polyline(latlngs, { color: '#2b6fb3', weight: 3, opacity: 0.8 }).addTo(map);
+    }
+
+    const birthEntry = entries.find(e => e.type === 'birth');
+    const focusPoint = birthEntry ? [birthEntry.place.lat, birthEntry.place.lng] : latlngs[0];
+
+    // The modal (and therefore the map container) may have just become
+    // visible, so give Leaflet a tick to measure its real size before
+    // framing the view \u2014 otherwise it can render at the wrong size/offset.
+    setTimeout(() => {
+      map.invalidateSize();
+      map.setView(focusPoint, 13);
+    }, 50);
+  }
 
   function eventsForPerson(personId){
     return events
@@ -1937,6 +2166,7 @@ const personPlacesCol = collection(db, 'personPlaces');
       timelineEmptyNote.style.display = 'block';
       timelineEmptyNote.textContent = 'No life events recorded yet. Click the pencil icon to add some.';
       timelineOverlay.classList.add('open');
+      updateTimelineMap(personId);
       return;
     }
 
@@ -1999,6 +2229,7 @@ const personPlacesCol = collection(db, 'personPlaces');
     });
 
     timelineOverlay.classList.add('open');
+    updateTimelineMap(personId);
   }
 
   document.getElementById('timeline-close').addEventListener('click', () => {
@@ -2166,32 +2397,16 @@ const personPlacesCol = collection(db, 'personPlaces');
 
   const PLACE_TYPE_LABELS = { birth: 'Birthplace', lived: 'Lived here' };
 
-  function updatePlaceSuggestions(){
-    const q = placeNameInput.value.trim().toLowerCase();
-    placeSuggestionsEl.innerHTML = '';
+  const placeAutocomplete = attachAutocomplete({
+    input: placeNameInput,
+    panel: placeSuggestionsEl,
+    getMatches: (q) => places.filter(p => p.name.toLowerCase().includes(q)).slice(0, 6),
+    renderItem: (item, p) => { item.textContent = p.name; },
+    onSelect: (p) => { selectedPlaceId = p.id; placeNameInput.value = p.name; }
+  });
+  placeNameInput.addEventListener('input', () => {
     selectedPlaceId = null;
-    if (!q){ placeSuggestionsEl.classList.remove('open'); return; }
-    const matches = places.filter(p => p.name.toLowerCase().includes(q)).slice(0, 6);
-    if (!matches.length){ placeSuggestionsEl.classList.remove('open'); return; }
-    matches.forEach(p => {
-      const item = document.createElement('div');
-      item.className = 'suggestion-item';
-      item.textContent = p.name;
-      item.addEventListener('click', () => {
-        selectedPlaceId = p.id;
-        placeNameInput.value = p.name;
-        placeSuggestionsEl.classList.remove('open');
-        placeSuggestionsEl.innerHTML = '';
-      });
-      placeSuggestionsEl.appendChild(item);
-    });
-    placeSuggestionsEl.classList.add('open');
-  }
-  placeNameInput.addEventListener('input', updatePlaceSuggestions);
-  document.addEventListener('click', (e) => {
-    if (e.target !== placeNameInput && !e.target.closest('#place-suggestions')){
-      placeSuggestionsEl.classList.remove('open');
-    }
+    placeAutocomplete.refresh();
   });
 
   function renderEditPlacesList(){
@@ -2377,8 +2592,6 @@ const personPlacesCol = collection(db, 'personPlaces');
   function lockToExisting(node){
     selectedExistingId = node.id;
     nameInput.value = node.name;
-    suggestionsEl.classList.remove('open');
-    suggestionsEl.innerHTML = '';
     existingNoteEl.classList.add('open');
     birthInput.disabled = true;
     deathInput.disabled = true;
@@ -2395,41 +2608,26 @@ const personPlacesCol = collection(db, 'personPlaces');
     maidenInput.disabled = false;
   }
 
-  function updateSuggestions(){
-    const q = nameInput.value.trim().toLowerCase();
-    suggestionsEl.innerHTML = '';
-    if (!q){ suggestionsEl.classList.remove('open'); return; }
-    const matches = nodes
+  const personFormAutocomplete = attachAutocomplete({
+    input: nameInput,
+    panel: suggestionsEl,
+    getMatches: (q) => nodes
       .filter(n => n.id !== pendingSourceId &&
         (n.name.toLowerCase().includes(q) || (n.maidenName && n.maidenName.toLowerCase().includes(q))))
-      .slice(0, 6);
-    if (!matches.length){ suggestionsEl.classList.remove('open'); return; }
-    matches.forEach(m => {
-      const item = document.createElement('div');
-      item.className = 'suggestion-item';
-      const dates = (m.birth || m.death) ? `${m.birth || '?'}\u2013${m.death || 'living'}` : '';
-      const maiden = m.maidenName ? ` (n\u00e9e ${m.maidenName})` : '';
-      item.innerHTML = `${escapeHtml(m.name)}${escapeHtml(maiden)}${dates ? `<span class="s-dates">${escapeHtml(dates)}</span>` : ''}`;
-      item.addEventListener('click', () => lockToExisting(m));
-      suggestionsEl.appendChild(item);
-    });
-    suggestionsEl.classList.add('open');
-  }
+      .slice(0, 6),
+    renderItem: renderPersonSuggestion,
+    onSelect: lockToExisting
+  });
 
   nameInput.addEventListener('input', () => {
     if (selectedExistingId) unlockExisting();
-    updateSuggestions();
+    personFormAutocomplete.refresh();
   });
   document.getElementById('clear-existing').addEventListener('click', (e) => {
     e.preventDefault();
     unlockExisting();
     nameInput.value = '';
     nameInput.focus();
-  });
-  document.addEventListener('click', (e) => {
-    if (e.target !== nameInput && !e.target.closest('#name-suggestions')){
-      suggestionsEl.classList.remove('open');
-    }
   });
 
   function openModal(sourceId){
@@ -2623,9 +2821,22 @@ const personPlacesCol = collection(db, 'personPlaces');
     syncLabelEl.textContent = label;
   }
 
+  // Wraps onSnapshot with the doc-mapping + status-setting + error-handling
+  // that was previously repeated identically for all five collections.
+  // onData receives the collection already mapped to {id, ...fields} objects.
+  function subscribe(colRef, label, onData){
+    onSnapshot(colRef, (snap) => {
+      onData(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setSyncStatus('synced', 'Synced');
+    }, (err) => {
+      console.error(label + ' sync error', err);
+      setSyncStatus('error', 'Sync error — check Firestore rules');
+    });
+  }
+
   function startSync(){
-    onSnapshot(peopleCol, (snap) => {
-      nodes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    subscribe(peopleCol, 'People', (docs) => {
+      nodes = docs;
       // Remember the real saved positions (pre-override) so "Manual" can
       // restore to them later without needing another round trip.
       nodes.forEach(n => { savedPositions[n.id] = { x: n.x, y: n.y }; });
@@ -2664,58 +2875,37 @@ const personPlacesCol = collection(db, 'personPlaces');
           openTimelineModal(requestedNode.id);
         }
       }
-
-      setSyncStatus('synced', 'Synced');
-    }, (err) => {
-      console.error('People sync error', err);
-      setSyncStatus('error', 'Sync error — check Firestore rules');
     });
 
-    onSnapshot(linksCol, (snap) => {
-      links = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    subscribe(linksCol, 'Links', (docs) => {
+      links = docs;
       renderAll();
       if (editOverlay.classList.contains('open')) renderEditRelationsList();
-      setSyncStatus('synced', 'Synced');
-    }, (err) => {
-      console.error('Links sync error', err);
-      setSyncStatus('error', 'Sync error — check Firestore rules');
     });
 
-    onSnapshot(eventsCol, (snap) => {
-      events = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    subscribe(eventsCol, 'Events', (docs) => {
+      events = docs;
       renderAll(); // event-count badges on cards depend on this data too
       if (editOverlay.classList.contains('open')) renderEditEventsList();
       if (timelineOverlay.classList.contains('open') && currentTimelinePersonId){
         openTimelineModal(currentTimelinePersonId);
       }
-      setSyncStatus('synced', 'Synced');
-    }, (err) => {
-      console.error('Events sync error', err);
-      setSyncStatus('error', 'Sync error — check Firestore rules');
     });
 
-    onSnapshot(placesCol, (snap) => {
-      places = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    subscribe(placesCol, 'Places', (docs) => {
+      places = docs;
       if (editOverlay.classList.contains('open')) renderEditPlacesList();
       if (timelineOverlay.classList.contains('open') && currentTimelinePersonId){
         openTimelineModal(currentTimelinePersonId);
       }
-      setSyncStatus('synced', 'Synced');
-    }, (err) => {
-      console.error('Places sync error', err);
-      setSyncStatus('error', 'Sync error — check Firestore rules');
     });
 
-    onSnapshot(personPlacesCol, (snap) => {
-      personPlaces = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    subscribe(personPlacesCol, 'Person-places', (docs) => {
+      personPlaces = docs;
       if (editOverlay.classList.contains('open')) renderEditPlacesList();
       if (timelineOverlay.classList.contains('open') && currentTimelinePersonId){
         openTimelineModal(currentTimelinePersonId);
       }
-      setSyncStatus('synced', 'Synced');
-    }, (err) => {
-      console.error('Person-places sync error', err);
-      setSyncStatus('error', 'Sync error — check Firestore rules');
     });
   }
 

@@ -712,6 +712,11 @@
         </select>
         <button id="edit-save-basic" type="button" class="btn-submit edit-save-btn">Save changes</button>
         <span id="edit-save-confirm" class="edit-save-confirm">Saved</span>
+
+        <div class="danger-zone">
+          <p>Removing this person deletes them from the board along with their relations, life events, and place links. This can't be undone.</p>
+          <button id="edit-delete-person" type="button" class="btn-danger">Delete person</button>
+        </div>
       </section>
 
       <section class="edit-section">
@@ -2262,9 +2267,16 @@ const personPlacesCol = collection(db, 'personPlaces');
   const eventYearInput = document.getElementById('event-year');
   const eventDescInput = document.getElementById('event-desc');
   const eventEvidenceInput = document.getElementById('event-evidence');
+  const editDeletePersonBtn = document.getElementById('edit-delete-person');
 
   let currentEditPersonId = null;
   let editingEventId = null; // set while the event form is editing an existing event rather than adding a new one
+  let deleteArmed = false; // requires a second confirming click before the delete actually happens
+
+  function resetDeleteArm(){
+    deleteArmed = false;
+    editDeletePersonBtn.textContent = 'Delete person';
+  }
 
   function startEditingEvent(ev){
     editingEventId = ev.id;
@@ -2490,6 +2502,7 @@ const personPlacesCol = collection(db, 'personPlaces');
     editGenderInput.value = person.gender || 'u';
     editSaveConfirm.classList.remove('show');
     stopEditingEvent(); // in case the modal was left mid-edit last time
+    resetDeleteArm();   // in case the modal was left mid-confirm last time
     editPlaceForm.reset();
     selectedPlaceId = null;
     placeSuggestionsEl.classList.remove('open');
@@ -2503,6 +2516,7 @@ const personPlacesCol = collection(db, 'personPlaces');
 
   function closeEditModal(){
     editOverlay.classList.remove('open');
+    resetDeleteArm();
     const id = currentEditPersonId;
     currentEditPersonId = null;
     // Return to the timeline so newly added events/dates are visible right away.
@@ -2538,6 +2552,65 @@ const personPlacesCol = collection(db, 'personPlaces');
     reopenEditAfterModal = currentEditPersonId;
     editOverlay.classList.remove('open');
     openModal(currentEditPersonId);
+  });
+
+  // Removes a person entirely: their own document, every link that touches
+  // them (parent/child/spouse/sibling), every life event they own, and
+  // every personPlaces entry linking them to a place. Places themselves
+  // (and other people's links to those places) are left alone — a place
+  // can still be shared by other people.
+  async function deletePersonAndRelations(personId){
+    try {
+      const batch = writeBatch(db);
+      links
+        .filter(l => l.source === personId || l.target === personId)
+        .forEach(l => batch.delete(doc(linksCol, l.id)));
+      events
+        .filter(ev => ev.personId === personId)
+        .forEach(ev => batch.delete(doc(eventsCol, ev.id)));
+      personPlaces
+        .filter(pp => pp.personId === personId)
+        .forEach(pp => batch.delete(doc(personPlacesCol, pp.id)));
+      batch.delete(doc(peopleCol, personId));
+      await batch.commit();
+      return true;
+    } catch (err){
+      console.error('Failed to delete person', err);
+      setSyncStatus('error', 'Delete failed \u2014 check connection');
+      return false;
+    }
+  }
+
+  editDeletePersonBtn.addEventListener('click', async () => {
+    if (!currentEditPersonId) return;
+
+    if (!deleteArmed){
+      deleteArmed = true;
+      editDeletePersonBtn.textContent = 'Click again to confirm';
+      setTimeout(() => { if (deleteArmed) resetDeleteArm(); }, 4000);
+      return;
+    }
+
+    const personId = currentEditPersonId;
+    resetDeleteArm();
+    const ok = await deletePersonAndRelations(personId);
+    if (!ok) return;
+
+    // Drop any tracking state that referenced the now-deleted person so
+    // the highlight engine doesn't keep pointing at a stale id.
+    if (trackedRootId === personId) clearTracking();
+    if (relationFirstId === personId || (relationEndpointIds && relationEndpointIds.has(personId))){
+      clearRelationTracking();
+    }
+
+    // Close both modals directly (bypassing closeEditModal's normal
+    // "reopen the timeline" behavior, since there's no one left to show).
+    currentEditPersonId = null;
+    editOverlay.classList.remove('open');
+    if (timelineOverlay.classList.contains('open') && currentTimelinePersonId === personId){
+      timelineOverlay.classList.remove('open');
+      currentTimelinePersonId = null;
+    }
   });
 
   editEventForm.addEventListener('submit', async (e) => {

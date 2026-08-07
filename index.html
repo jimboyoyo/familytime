@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">       
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -394,6 +394,21 @@
     line-height:1.6;
   }
 
+  .timeline-bio{
+    display:none;
+    margin:16px 16px 4px;
+    padding:12px 14px;
+    background:var(--card-bg-edge);
+    border-left:3px solid var(--accent);
+    border-radius:2px;
+    font-family:var(--font-ui);
+    font-size:13px;
+    line-height:1.65;
+    color:var(--ink);
+    white-space:pre-wrap;
+  }
+  .timeline-bio.show{ display:block; }
+
   /* ---------- Edit person modal ---------- */
   #edit-overlay{
     position:fixed; top:0; left:0; right:0; bottom:0;
@@ -431,6 +446,11 @@
   .edit-section input, .edit-section select{
     width:100%; padding:7px 8px; font-family:var(--font-ui); font-size:13px;
     border:1px solid rgba(0,0,0,0.3); border-radius:3px; background:#fffdf6;
+  }
+  .edit-section textarea{
+    width:100%; padding:8px 9px; font-family:var(--font-ui); font-size:13px;
+    border:1px solid rgba(0,0,0,0.3); border-radius:3px; background:#fffdf6;
+    resize:vertical; min-height:76px; line-height:1.55;
   }
   .edit-save-btn{ margin-top:14px; }
   .edit-save-confirm{
@@ -672,6 +692,7 @@
     </div>
     <div class="timeline-content-row">
       <div id="timeline-body">
+        <div id="timeline-bio" class="timeline-bio"></div>
         <table id="timeline-table">
           <thead>
             <tr><th>Year</th><th>Event</th><th>Evidence</th></tr>
@@ -719,6 +740,8 @@
           <option value="o">Other</option>
           <option value="u">Unknown</option>
         </select>
+        <label for="edit-bio">Life summary <span class="label-optional">(shown above their timeline)</span></label>
+        <textarea id="edit-bio" rows="4" placeholder="A paragraph or two summarizing their life, in your own words..."></textarea>
         <button id="edit-save-basic" type="button" class="btn-submit edit-save-btn">Save changes</button>
         <span id="edit-save-confirm" class="edit-save-confirm">Saved</span>
 
@@ -2069,6 +2092,7 @@ const personPlacesCol = collection(db, 'personPlaces');
   const timelineOverlay = document.getElementById('timeline-overlay');
   const timelineNameEl = document.getElementById('timeline-name');
   const timelineDatesEl = document.getElementById('timeline-dates');
+  const timelineBioEl = document.getElementById('timeline-bio');
   const timelineTable = document.getElementById('timeline-table');
   const timelineTbody = document.getElementById('timeline-tbody');
   const timelineEmptyNote = document.getElementById('timeline-empty-note');
@@ -2170,6 +2194,14 @@ const personPlacesCol = collection(db, 'personPlaces');
 
     timelineDatesEl.textContent = placesLine ? `${dateRange} \u00b7 ${placesLine}` : dateRange;
 
+    if (person.bio){
+      timelineBioEl.textContent = person.bio;
+      timelineBioEl.classList.add('show');
+    } else {
+      timelineBioEl.textContent = '';
+      timelineBioEl.classList.remove('show');
+    }
+
     timelineTbody.innerHTML = '';
 
     const personEvents = eventsForPerson(personId);
@@ -2265,6 +2297,7 @@ const personPlacesCol = collection(db, 'personPlaces');
   const editDeathInput = document.getElementById('edit-death');
   const editGenderInput = document.getElementById('edit-gender');
   const editMaidenInput = document.getElementById('edit-maiden');
+  const editBioInput = document.getElementById('edit-bio');
   const editSaveBasicBtn = document.getElementById('edit-save-basic');
   const editSaveConfirm = document.getElementById('edit-save-confirm');
   const editRelationsList = document.getElementById('edit-relations-list');
@@ -2509,6 +2542,7 @@ const personPlacesCol = collection(db, 'personPlaces');
     editBirthInput.value = person.birth || '';
     editDeathInput.value = person.death || '';
     editGenderInput.value = person.gender || 'u';
+    editBioInput.value = person.bio || '';
     editSaveConfirm.classList.remove('show');
     stopEditingEvent(); // in case the modal was left mid-edit last time
     resetDeleteArm();   // in case the modal was left mid-confirm last time
@@ -2543,10 +2577,12 @@ const personPlacesCol = collection(db, 'personPlaces');
     const birth = editBirthInput.value ? Number(editBirthInput.value) : null;
     const death = editDeathInput.value ? Number(editDeathInput.value) : null;
     const gender = editGenderInput.value;
+    const bio = editBioInput.value.trim();
     try {
       await updateDoc(doc(peopleCol, currentEditPersonId), {
         name, birth, death, gender,
-        maidenName: maidenName || null
+        maidenName: maidenName || null,
+        bio: bio || null
       });
       editPersonNameLabel.textContent = name;
       editSaveConfirm.classList.add('show');

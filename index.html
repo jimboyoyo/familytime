@@ -467,8 +467,9 @@
   }
   .btn-secondary:hover{ background:rgba(138,106,52,0.1); }
 
-  .danger-zone{ margin-top:18px; padding-top:14px; border-top:1px dashed rgba(162,54,54,0.4); }
-  .danger-zone p{ font-size:11px; color:var(--ink-soft); margin:0 0 8px; line-height:1.5; }
+  #danger-zone-section{ border-top:1px dashed rgba(162,54,54,0.5); }
+  #danger-zone-section h3{ color:var(--thread-spouse); }
+  .danger-zone-note{ font-size:11px; color:var(--ink-soft); margin:0 0 8px; line-height:1.5; }
   .btn-danger{
     font-family:var(--font-ui); font-size:12px; font-weight:600;
     padding:7px 12px; border-radius:3px; border:1px solid var(--thread-spouse);
@@ -744,11 +745,6 @@
         <textarea id="edit-bio" rows="4" placeholder="A paragraph or two summarizing their life, in your own words..."></textarea>
         <button id="edit-save-basic" type="button" class="btn-submit edit-save-btn">Save changes</button>
         <span id="edit-save-confirm" class="edit-save-confirm">Saved</span>
-
-        <div class="danger-zone">
-          <p>Removing this person deletes them from the board along with their relations, life events, and place links. This can't be undone.</p>
-          <button id="edit-delete-person" type="button" class="btn-danger">Delete person</button>
-        </div>
       </section>
 
       <section class="edit-section">
@@ -800,6 +796,12 @@
           </div>
           <button type="submit" class="btn-secondary">+ Add place</button>
         </form>
+      </section>
+
+      <section class="edit-section" id="danger-zone-section" style="display:none;">
+        <h3>Danger zone</h3>
+        <p class="danger-zone-note">Removing this person deletes them from the board along with their relations, life events, and place links. This can't be undone.</p>
+        <button id="edit-delete-person" type="button" class="btn-danger">Delete person</button>
       </section>
 
     </div>
@@ -2310,10 +2312,16 @@ const personPlacesCol = collection(db, 'personPlaces');
   const eventDescInput = document.getElementById('event-desc');
   const eventEvidenceInput = document.getElementById('event-evidence');
   const editDeletePersonBtn = document.getElementById('edit-delete-person');
+  const dangerZoneSection = document.getElementById('danger-zone-section');
 
   let currentEditPersonId = null;
   let editingEventId = null; // set while the event form is editing an existing event rather than adding a new one
   let deleteArmed = false; // requires a second confirming click before the delete actually happens
+
+  // Only the owner account ever sees the delete control at all.
+  function updateDangerZoneVisibility(){
+    dangerZoneSection.style.display = isOwner() ? '' : 'none';
+  }
 
   function resetDeleteArm(){
     deleteArmed = false;
@@ -2546,6 +2554,7 @@ const personPlacesCol = collection(db, 'personPlaces');
     editSaveConfirm.classList.remove('show');
     stopEditingEvent(); // in case the modal was left mid-edit last time
     resetDeleteArm();   // in case the modal was left mid-confirm last time
+    updateDangerZoneVisibility();
     editPlaceForm.reset();
     selectedPlaceId = null;
     placeSuggestionsEl.classList.remove('open');
@@ -2627,7 +2636,7 @@ const personPlacesCol = collection(db, 'personPlaces');
   }
 
   editDeletePersonBtn.addEventListener('click', async () => {
-    if (!currentEditPersonId) return;
+    if (!currentEditPersonId || !isOwner()) return;
 
     if (!deleteArmed){
       deleteArmed = true;
@@ -2870,6 +2879,18 @@ const personPlacesCol = collection(db, 'personPlaces');
     return !!(auth.currentUser && !auth.currentUser.isAnonymous);
   }
 
+  // Restricts the "delete person" control to a single account. Note this
+  // is a client-side (UI) gate only — anyone else who's already an editor
+  // per the Firestore security rules could still delete records via, say,
+  // the browser console. If that matters, the security rules themselves
+  // need a matching restriction (e.g. only this email allowed to delete
+  // from people/links/events/personPlaces), not just this check.
+  const OWNER_EMAIL = 'jimbernstrom@gmail.com';
+  function isOwner(){
+    return isEditor() && !!auth.currentUser.email &&
+      auth.currentUser.email.toLowerCase() === OWNER_EMAIL.toLowerCase();
+  }
+
   const authStatusEl = document.getElementById('auth-status');
   const authStatusLabel = document.getElementById('auth-status-label');
   const authBtn = document.getElementById('auth-btn');
@@ -2899,6 +2920,7 @@ const personPlacesCol = collection(db, 'personPlaces');
     }
     document.body.classList.toggle('read-only', !isEditor());
     renderAll(); // show/hide edit affordances (add buttons, pencil, etc.)
+    if (editOverlay.classList.contains('open')) updateDangerZoneVisibility();
   }
 
   authBtn.addEventListener('click', () => {

@@ -346,6 +346,19 @@
   .place-popup{ font-family:var(--font-ui); color:var(--ink); }
   .place-popup b{ font-family:var(--font-display); font-weight:normal; }
 
+  .leaflet-tooltip.place-year-tooltip{
+    background:var(--card-bg);
+    border:1px solid rgba(0,0,0,0.35);
+    border-radius:3px;
+    padding:1px 6px;
+    font-family:var(--font-body);
+    font-weight:700;
+    font-size:11px;
+    color:var(--ink);
+    box-shadow:1px 2px 4px rgba(0,0,0,0.25);
+  }
+  .leaflet-tooltip.place-year-tooltip::before{ display:none; }
+
   @media (max-width: 720px){
     #timeline-modal{ width:95vw; height:88vh; max-height:88vh; }
     .timeline-content-row{ flex-direction:column; }
@@ -447,6 +460,15 @@
     width:100%; padding:7px 8px; font-family:var(--font-ui); font-size:13px;
     border:1px solid rgba(0,0,0,0.3); border-radius:3px; background:#fffdf6;
   }
+  .edit-section input:disabled{
+    background:rgba(0,0,0,0.05); color:var(--ink-soft); cursor:not-allowed;
+  }
+  .place-year-hint{
+    display:none;
+    font-size:11px; color:var(--ink-soft); font-style:italic;
+    margin:4px 0 0;
+  }
+  .place-year-hint.show{ display:block; }
   .edit-section textarea{
     width:100%; padding:8px 9px; font-family:var(--font-ui); font-size:13px;
     border:1px solid rgba(0,0,0,0.3); border-radius:3px; background:#fffdf6;
@@ -794,6 +816,9 @@
               <div id="place-suggestions" class="suggestions"></div>
             </div>
           </div>
+          <label for="place-year">Year</label>
+          <input id="place-year" type="number" placeholder="1925">
+          <p id="place-year-hint" class="place-year-hint">Uses this person's birth year automatically.</p>
           <button type="submit" class="btn-secondary">+ Add place</button>
         </form>
       </section>
@@ -2117,19 +2142,23 @@ const personPlacesCol = collection(db, 'personPlaces');
   }
 
   // Shows every place this person has coordinates for (birthplace + places
-  // lived), connected in order with a line so the map reads as "the path
-  // this person's life took" \u2014 then frames the view on the birthplace,
-  // since that's the natural starting point of that path.
+  // lived), connected in chronological order (by each entry's resolved
+  // year — birth's year comes from the person automatically) with a line
+  // so the map reads as "the path this person's life took" \u2014 then frames
+  // the view on the earliest-dated place, the natural starting point.
+  // Entries with no known year sort to the end rather than being dropped.
   function updateTimelineMap(personId){
     const map = ensureTimelineMap();
+    const person = nodeById(personId);
 
     timelineMapMarkers.forEach(m => map.removeLayer(m));
     timelineMapMarkers = [];
     if (timelineMapLine){ map.removeLayer(timelineMapLine); timelineMapLine = null; }
 
-    const entries = placesForPerson(personId)
-      .filter(pp => pp.place.lat != null && pp.place.lng != null)
-      .sort((a, b) => (a.type === 'birth' ? -1 : 0) - (b.type === 'birth' ? -1 : 0));
+    const entries = sortEntriesChronologically(
+      placesForPerson(personId).filter(pp => pp.place.lat != null && pp.place.lng != null),
+      person
+    );
 
     if (!entries.length){
       timelineMapEmptyEl.classList.add('show');
@@ -2142,7 +2171,19 @@ const personPlacesCol = collection(db, 'personPlaces');
     entries.forEach((entry, i) => {
       const marker = L.marker(latlngs[i]).addTo(map);
       const label = entry.type === 'birth' ? 'Born here' : 'Lived here';
-      marker.bindPopup(`<div class="place-popup"><b>${escapeHtml(entry.place.name)}</b><br>${label}</div>`);
+      const year = resolveEntryYear(entry, person);
+      marker.bindPopup(`<div class="place-popup"><b>${escapeHtml(entry.place.name)}</b><br>${label}${year != null ? ' \u00b7 ' + year : ''}</div>`);
+      if (year != null){
+        // A little year "header" that sits above the pin at all times,
+        // not just on hover/click, so the chronological order is visible
+        // at a glance without opening every popup.
+        marker.bindTooltip(String(year), {
+          permanent: true,
+          direction: 'top',
+          offset: [0, -6],
+          className: 'place-year-tooltip'
+        });
+      }
       timelineMapMarkers.push(marker);
     });
 
@@ -2150,8 +2191,7 @@ const personPlacesCol = collection(db, 'personPlaces');
       timelineMapLine = L.polyline(latlngs, { color: '#2b6fb3', weight: 3, opacity: 0.8 }).addTo(map);
     }
 
-    const birthEntry = entries.find(e => e.type === 'birth');
-    const focusPoint = birthEntry ? [birthEntry.place.lat, birthEntry.place.lng] : latlngs[0];
+    const focusPoint = latlngs[0]; // earliest-dated entry after the chronological sort above
 
     // The modal (and therefore the map container) may have just become
     // visible, so give Leaflet a tick to measure its real size before
@@ -2181,7 +2221,9 @@ const personPlacesCol = collection(db, 'personPlaces');
 
     const personPlaceEntries = placesForPerson(personId);
     const birthEntry = personPlaceEntries.find(pp => pp.type === 'birth');
-    const livedEntries = personPlaceEntries.filter(pp => pp.type === 'lived');
+    const livedEntries = sortEntriesChronologically(
+      personPlaceEntries.filter(pp => pp.type === 'lived'), person
+    );
 
     let placesLine = '';
     if (birthEntry){
@@ -2190,7 +2232,10 @@ const personPlacesCol = collection(db, 'personPlaces');
       placesLine = `Born in ${person.birthPlace}`; // legacy free-text fallback
     }
     if (livedEntries.length){
-      const livedNames = livedEntries.map(pp => pp.place.name).join(', ');
+      const livedNames = livedEntries.map(pp => {
+        const y = resolveEntryYear(pp, person);
+        return y != null ? `${pp.place.name} (${y})` : pp.place.name;
+      }).join(', ');
       placesLine += (placesLine ? ' \u00b7 ' : '') + `Also lived: ${livedNames}`;
     }
 
@@ -2444,6 +2489,8 @@ const personPlacesCol = collection(db, 'personPlaces');
   const editPlaceForm = document.getElementById('edit-place-form');
   const placeTypeSelect = document.getElementById('place-type');
   const placeNameInput = document.getElementById('place-name');
+  const placeYearInput = document.getElementById('place-year');
+  const placeYearHint = document.getElementById('place-year-hint');
   const placeSuggestionsEl = document.getElementById('place-suggestions');
 
   let selectedPlaceId = null; // set when the typed name matches an existing place
@@ -2457,7 +2504,39 @@ const personPlacesCol = collection(db, 'personPlaces');
       .filter(pp => pp.place); // drop any orphaned refs
   }
 
+  // A place entry's effective year: whatever was recorded on it, or (for
+  // birthplaces specifically) the person's own birth year as a fallback —
+  // this covers both "never asked for a year because it's a birthplace"
+  // and older birthplace entries saved before this field existed.
+  function resolveEntryYear(entry, person){
+    if (entry.year != null) return entry.year;
+    if (entry.type === 'birth' && person && person.birth != null) return person.birth;
+    return null;
+  }
+
+  // Ascending by resolved year; entries with no known year sort last
+  // rather than being dropped or ordered arbitrarily.
+  function sortEntriesChronologically(entries, person){
+    return entries.slice().sort((a, b) => {
+      const ya = resolveEntryYear(a, person), yb = resolveEntryYear(b, person);
+      if (ya == null && yb == null) return 0;
+      if (ya == null) return 1;
+      if (yb == null) return -1;
+      return ya - yb;
+    });
+  }
+
   const PLACE_TYPE_LABELS = { birth: 'Birthplace', lived: 'Lived here' };
+
+  // Birthplace years come from the person automatically, so the year field
+  // is only meaningful (and only shown as enterable) for "lived here" entries.
+  function updatePlaceYearFieldState(){
+    const isBirth = placeTypeSelect.value === 'birth';
+    placeYearInput.disabled = isBirth;
+    if (isBirth) placeYearInput.value = '';
+    placeYearHint.classList.toggle('show', isBirth);
+  }
+  placeTypeSelect.addEventListener('change', updatePlaceYearFieldState);
 
   const placeAutocomplete = attachAutocomplete({
     input: placeNameInput,
@@ -2473,24 +2552,27 @@ const personPlacesCol = collection(db, 'personPlaces');
 
   function renderEditPlacesList(){
     if (!currentEditPersonId) return;
-    const personEntries = placesForPerson(currentEditPersonId);
+    const person = nodeById(currentEditPersonId);
+    const personEntries = sortEntriesChronologically(placesForPerson(currentEditPersonId), person);
     editPlacesList.innerHTML = '';
     if (!personEntries.length){
       editPlacesList.innerHTML = '<div class="edit-list-empty">No places recorded yet.</div>';
       return;
     }
-    // Birthplace first, then "lived here" entries.
-    personEntries.sort((a, b) => (a.type === 'birth' ? -1 : 0) - (b.type === 'birth' ? -1 : 0));
     personEntries.forEach(entry => {
       const row = document.createElement('div');
       row.className = 'edit-list-item';
       const main = document.createElement('div');
       main.className = 'item-main';
-      const typeSpan = document.createElement('span');
-      typeSpan.className = 'item-year';
-      typeSpan.textContent = PLACE_TYPE_LABELS[entry.type] || entry.type;
-      main.appendChild(typeSpan);
-      main.appendChild(document.createTextNode(entry.place.name));
+
+      const year = resolveEntryYear(entry, person);
+      const yearSpan = document.createElement('span');
+      yearSpan.className = 'item-year';
+      yearSpan.textContent = year != null ? year : '?';
+      main.appendChild(yearSpan);
+      main.appendChild(document.createTextNode(
+        `${PLACE_TYPE_LABELS[entry.type] || entry.type} \u2014 ${entry.place.name}`
+      ));
 
       const removeBtn = document.createElement('button');
       removeBtn.className = 'item-remove';
@@ -2512,6 +2594,15 @@ const personPlacesCol = collection(db, 'personPlaces');
     const name = placeNameInput.value.trim();
     if (!name) return;
     const type = placeTypeSelect.value;
+    const person = nodeById(currentEditPersonId);
+
+    // Birthplaces always use the person's birth year, never a manual
+    // entry — if their birth year isn't known yet, the entry just has no
+    // year until it is (resolveEntryYear will pick it up automatically
+    // once the person's birth year gets filled in later).
+    const year = (type === 'birth')
+      ? (person && person.birth != null ? person.birth : null)
+      : (placeYearInput.value ? Number(placeYearInput.value) : null);
 
     try {
       let placeId = selectedPlaceId;
@@ -2530,9 +2621,10 @@ const personPlacesCol = collection(db, 'personPlaces');
         }
       }
 
-      await setDoc(doc(personPlacesCol), { personId: currentEditPersonId, placeId, type });
+      await setDoc(doc(personPlacesCol), { personId: currentEditPersonId, placeId, type, year });
       editPlaceForm.reset();
       selectedPlaceId = null;
+      updatePlaceYearFieldState();
     } catch (err){
       console.error('Failed to add place', err);
     }
@@ -2558,6 +2650,7 @@ const personPlacesCol = collection(db, 'personPlaces');
     editPlaceForm.reset();
     selectedPlaceId = null;
     placeSuggestionsEl.classList.remove('open');
+    updatePlaceYearFieldState();
 
     renderEditRelationsList();
     renderEditEventsList();

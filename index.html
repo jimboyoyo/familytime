@@ -2141,12 +2141,55 @@ const personPlacesCol = collection(db, 'personPlaces');
     return timelineMap;
   }
 
+  // Turns a sequence of straight [lat,lng] hops into one continuous path
+  // where each hop bows into a gentle curve instead of a straight line.
+  // The bow is a quadratic-bezier bulge perpendicular to that hop's own
+  // direction of travel, consistently to the same side of it (right-hand
+  // rule) — which means a hop retraced in the opposite direction later
+  // (leaving a place, then coming back to it) bows to the opposite visual
+  // side automatically, so outbound and return legs never draw on top of
+  // each other even though they connect the exact same two points.
+  function buildCurvedPath(points){
+    if (points.length < 2) return points.slice();
+    const STEPS = 20;             // interpolated segments per hop, for smoothness
+    const BULGE_FRACTION = 0.09;  // how far the curve bows out, as a share of hop length
+    const MAX_BULGE_DEG = 2.5;    // caps the bow for very long (e.g. intercontinental) hops
+
+    const curved = [];
+    for (let i = 0; i < points.length - 1; i++){
+      const p0 = points[i], p1 = points[i + 1];
+      const dLat = p1[0] - p0[0], dLng = p1[1] - p0[1];
+      const hopLen = Math.hypot(dLat, dLng) || 1;
+      const bulge = Math.min(hopLen * BULGE_FRACTION, MAX_BULGE_DEG);
+      const perpLat = (dLng / hopLen) * bulge;
+      const perpLng = (-dLat / hopLen) * bulge;
+      const ctrlLat = (p0[0] + p1[0]) / 2 + perpLat;
+      const ctrlLng = (p0[1] + p1[1]) / 2 + perpLng;
+
+      // Skip step 0 after the first hop so the point shared with the
+      // previous hop isn't duplicated in the combined path.
+      const startStep = i === 0 ? 0 : 1;
+      for (let s = startStep; s <= STEPS; s++){
+        const t = s / STEPS, mt = 1 - t;
+        curved.push([
+          mt * mt * p0[0] + 2 * mt * t * ctrlLat + t * t * p1[0],
+          mt * mt * p0[1] + 2 * mt * t * ctrlLng + t * t * p1[1]
+        ]);
+      }
+    }
+    return curved;
+  }
+
   // Shows every place this person has coordinates for (birthplace + places
   // lived), connected in chronological order (by each entry's resolved
   // year — birth's year comes from the person automatically) with a line
   // so the map reads as "the path this person's life took" \u2014 then frames
   // the view on the earliest-dated place, the natural starting point.
   // Entries with no known year sort to the end rather than being dropped.
+  // A place visited more than once (moved away and back) still gets a
+  // single marker there, rather than two overlapping pins — its label
+  // lists every year it was visited instead of just whichever was drawn
+  // last, and the connecting line still passes through it each time.
   function updateTimelineMap(personId){
     const map = ensureTimelineMap();
     const person = nodeById(personId);
@@ -2167,17 +2210,47 @@ const personPlacesCol = collection(db, 'personPlaces');
     }
     timelineMapEmptyEl.classList.remove('show');
 
+    // The line uses every visit in chronological order (so a return trip
+    // to an earlier place still shows as the path looping back there).
     const latlngs = entries.map(entry => [entry.place.lat, entry.place.lng]);
-    entries.forEach((entry, i) => {
-      const marker = L.marker(latlngs[i]).addTo(map);
-      const label = entry.type === 'birth' ? 'Born here' : 'Lived here';
-      const year = resolveEntryYear(entry, person);
-      marker.bindPopup(`<div class="place-popup"><b>${escapeHtml(entry.place.name)}</b><br>${label}${year != null ? ' \u00b7 ' + year : ''}</div>`);
-      if (year != null){
-        // A little year "header" that sits above the pin at all times,
-        // not just on hover/click, so the chronological order is visible
-        // at a glance without opening every popup.
-        marker.bindTooltip(String(year), {
+
+    // Markers are grouped by place instead: collect every visit to each
+    // distinct place before drawing anything, so repeat visits combine
+    // into one pin rather than stacking duplicate markers on top of
+    // each other.
+    const visitsByPlaceId = new Map();
+    entries.forEach(entry => {
+      if (!visitsByPlaceId.has(entry.placeId)){
+        visitsByPlaceId.set(entry.placeId, { place: entry.place, visits: [] });
+      }
+      visitsByPlaceId.get(entry.placeId).visits.push({
+        type: entry.type,
+        year: resolveEntryYear(entry, person)
+      });
+    });
+
+    visitsByPlaceId.forEach(({ place, visits }) => {
+      const sortedVisits = visits.slice().sort((a, b) => {
+        if (a.year == null && b.year == null) return 0;
+        if (a.year == null) return 1;
+        if (b.year == null) return -1;
+        return a.year - b.year;
+      });
+
+      const marker = L.marker([place.lat, place.lng]).addTo(map);
+
+      const popupLines = sortedVisits.map(v => {
+        const label = v.type === 'birth' ? 'Born here' : 'Lived here';
+        return v.year != null ? `${label} \u00b7 ${v.year}` : label;
+      }).join('<br>');
+      marker.bindPopup(`<div class="place-popup"><b>${escapeHtml(place.name)}</b><br>${popupLines}</div>`);
+
+      const years = sortedVisits.map(v => v.year).filter(y => y != null);
+      if (years.length){
+        // A little year "header" above the pin at all times, not just on
+        // hover/click — every year visited, comma-separated, so a place
+        // lived in twice shows both dates rather than just one.
+        marker.bindTooltip(years.join(', '), {
           permanent: true,
           direction: 'top',
           offset: [0, -6],
@@ -2188,10 +2261,10 @@ const personPlacesCol = collection(db, 'personPlaces');
     });
 
     if (latlngs.length > 1){
-      timelineMapLine = L.polyline(latlngs, { color: '#2b6fb3', weight: 3, opacity: 0.8 }).addTo(map);
+      timelineMapLine = L.polyline(buildCurvedPath(latlngs), { color: '#2b6fb3', weight: 3, opacity: 0.8 }).addTo(map);
     }
 
-    const focusPoint = latlngs[0]; // earliest-dated entry after the chronological sort above
+    const focusPoint = latlngs[0]; // earliest-dated visit after the chronological sort above
 
     // The modal (and therefore the map container) may have just become
     // visible, so give Leaflet a tick to measure its real size before
